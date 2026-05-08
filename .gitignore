@@ -30,9 +30,23 @@ result
 *~
 
 # cli tools
-CLAUDE.md
-.claude/
 AGENTS.override.md
+.codex-bak/
+
+# provider-local runtime state
+.agents/local/
+.agents/tmp/
+.agents/sessions/
+.agents/logs/
+.codex/local/
+.codex/tmp/
+.codex/sessions/
+.codex/logs/
+.claude/settings.local.json
+.claude/local/
+.claude/tmp/
+.claude/sessions/
+.claude/logs/
 
 # caches
 .cache/
@@ -50,6 +64,7 @@ yarn-debug.log*
 yarn-error.log*
 
 # env
+.env
 .env*
 !.env.example
 .venv/

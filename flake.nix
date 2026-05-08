@@ -72,6 +72,8 @@
               pkgs.cmake
               pkgs.llvmPackages.clang
               pkgs.llvmPackages.libclang.lib
+            ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+              pkgs.bubblewrap
             ];
             PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig";
             LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";

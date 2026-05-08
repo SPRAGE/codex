@@ -1,3 +1,22 @@
+# Shared AI Context
+
+This fork uses the SPRAGE dev-template shared AI context alongside the existing
+OpenAI Codex repository guidance.
+
+For non-trivial work, read these provider-neutral files after this file:
+
+1. `AI.md`
+2. `.ai/instructions.md`
+3. `.ai/context/active-context.md`
+4. `.ai/context/architecture-snapshot.md`
+5. `.ai/context/conventions.md`
+6. `.ai/context/decisions.md`
+
+Shared skills live in `.ai/skills/`. Codex discovers repo-scoped skills through
+`.agents/skills/`, and `.codex/skills/` is kept as a compatibility path. The
+OpenAI-specific skills that previously lived directly under `.codex/skills/`
+have been restored into the shared catalog.
+
 # Rust/codex-rs
 
 In the codex-rs folder where the rust code lives:

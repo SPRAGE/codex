@@ -1,0 +1,47 @@
+{
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": true,
+    "code-simplifier@claude-plugins-official": true
+  },
+  "permissions": {
+    "allow": [
+      "Bash(git:*)",
+      "Bash(nix:*)",
+      "Bash(npx:*)",
+      "Bash(cargo:*)",
+      "Bash(uv:*)",
+      "mcp__context7__resolve-library-id",
+      "mcp__context7__query-docs"
+    ],
+    "deny": [
+      "Edit(//.env)",
+      "Edit(//.env.*)",
+      "Read(//.env)",
+      "Read(//.env.*)",
+      "Edit(//.git/**)",
+      "Bash(git push --force:*)",
+      "Bash(sudo:*)",
+      "Bash(curl:*)",
+      "Bash(wget:*)",
+      "Bash(ssh:*)",
+      "Bash(scp:*)",
+      "Bash(nix-store --delete:*)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/session-start.sh"
+          }
+        ]
+      }
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": ".claude/hooks/statusline.sh"
+  }
+}
