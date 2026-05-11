@@ -1,9 +1,9 @@
 ---
 source: tui/src/redesign_chrome.rs
-assertion_line: 1609
+assertion_line: 1947
 expression: "render_fixture(100, 24)"
 ---
-"CODEX_CLI v0.0.0                                                                                    "
+"CODEX_CLI dev                                                                                       "
 "----------------------------------------------------------------------------------------------------"
 " CHATS                 |chat gpt-5.4 xhigh  ctx 72% left  tokens in 1.2K / out 900 / total 2.25K    "
 " C-B focus             |----------------------------------------------------------------------------"
@@ -23,7 +23,7 @@ expression: "render_fixture(100, 24)"
 "                       |                                                                            "
 "                       |                                                                            "
 "                       |                                                                            "
-"                       |                                                                            "
 "                       |----------------------------------------------------------------------------"
 "                       |⠋ MSG> Describe the next change...                                          "
+"                       |----------------------------------------------------------------------------"
 "~/codes/codex · redesign-tui · 3 ...  C-B side  F1 help  F2 cmds  F4 model  C-T transcript  C-C exit"

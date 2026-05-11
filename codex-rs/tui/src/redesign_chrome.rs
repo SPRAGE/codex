@@ -38,7 +38,13 @@ const TOP_ROWS: u16 = 2;
 const CHAT_SEPARATOR_ROWS: u16 = 1;
 const CHAT_HEADER_ROWS: u16 = 1;
 const FOOTER_ROWS: u16 = 1;
-const COMPOSER_ROWS: u16 = 2;
+const COMPOSER_TOP_RULE_ROWS: u16 = 1;
+const COMPOSER_BOTTOM_RULE_ROWS: u16 = 1;
+const COMPOSER_CHROME_ROWS: u16 = COMPOSER_TOP_RULE_ROWS + COMPOSER_BOTTOM_RULE_ROWS;
+const COMPOSER_ROWS: u16 = COMPOSER_CHROME_ROWS + 1;
+const COMPOSER_LABEL: &str = "MSG> ";
+const COMPOSER_PLACEHOLDER: &str = "Describe the next change...";
+const COMPOSER_INPUT_BG: Color = Color::Rgb(13, 15, 20);
 const WIDE_SIDE_WIDTH: u16 = 24;
 const RIGHT_RAIL_WIDTH: u16 = 30;
 const MIN_WIDE_WIDTH: u16 = 88;
@@ -481,7 +487,14 @@ fn layout_for(area: Rect, app: &App, legacy_bottom_pane: bool) -> RedesignLayout
             .min(available_chat_body_height.max(1))
             .max(1)
     } else {
-        COMPOSER_ROWS.min(available_chat_body_height)
+        let desired_height = composer_desired_height(
+            main_width,
+            &app.chat_widget.redesign_composer_text(),
+            app.chat_widget.redesign_task_running(),
+        );
+        desired_height
+            .min(available_chat_body_height)
+            .max(COMPOSER_ROWS.min(available_chat_body_height))
     };
 
     layout_for_dimensions_with_side(area, side_width, composer_height)
@@ -572,7 +585,15 @@ fn render_top_separator(area: Rect, buf: &mut Buffer) {
 }
 
 fn product_version_label(product: &str) -> String {
-    format!("{product} v{CODEX_CLI_VERSION}")
+    if is_source_build_version_label(CODEX_CLI_VERSION) {
+        format!("{product} dev")
+    } else {
+        format!("{product} v{CODEX_CLI_VERSION}")
+    }
+}
+
+fn is_source_build_version_label(version: &str) -> bool {
+    version.trim() == "0.0.0"
 }
 
 fn render_chat_bar(area: Rect, buf: &mut Buffer, context: &RedesignChromeContext) {
@@ -932,37 +953,208 @@ fn render_composer(
     }
 
     draw_horizontal_rule(area, buf, area.y);
-    let input_y = area
-        .y
-        .saturating_add(1)
-        .min(area.bottom().saturating_sub(1));
-    let input_area = Rect::new(area.x, input_y, area.width, 1);
-    let placeholder = "Describe the next change...";
-    let activity_width = activity_indicator
-        .as_ref()
-        .map(|indicator| UnicodeWidthStr::width(indicator.content.as_ref()) + 1)
-        .unwrap_or_default();
-    let mut spans = Vec::new();
-    if let Some(indicator) = activity_indicator {
-        spans.push(indicator);
-        spans.push(" ".into());
-    }
-    spans.push("MSG> ".magenta().bold());
-    if draft.is_empty() {
-        spans.push(placeholder.dim());
-    } else {
-        spans.push(Span::from(draft.to_string()));
-    }
-    render_line(input_area, buf, input_y, Line::from(spans));
+    draw_horizontal_rule(area, buf, area.bottom().saturating_sub(1));
 
-    let prefix_width = (activity_width + UnicodeWidthStr::width("MSG> ")) as u16;
-    let draft_width = UnicodeWidthStr::width(draft) as u16;
+    let input_height = area.height.saturating_sub(COMPOSER_CHROME_ROWS);
+    if input_height == 0 {
+        return None;
+    }
+
+    let input_y = area.y.saturating_add(COMPOSER_TOP_RULE_ROWS);
+    let input_area = Rect::new(area.x, input_y, area.width, input_height);
+    buf.set_style(input_area, Style::default().bg(COMPOSER_INPUT_BG));
+    let prefix_width = composer_prefix_width(activity_indicator.as_ref());
+    let lines = composer_input_lines(area.width, draft, activity_indicator);
+    let visible_start = lines.len().saturating_sub(input_height as usize);
+    let visible_lines = lines
+        .iter()
+        .skip(visible_start)
+        .cloned()
+        .collect::<Vec<_>>();
+    Paragraph::new(visible_lines).render(input_area, buf);
+
+    let cursor_line_idx = if draft.is_empty() {
+        0
+    } else {
+        lines.len().saturating_sub(1)
+    };
+    let cursor_y = input_area.y.saturating_add(
+        cursor_line_idx
+            .saturating_sub(visible_start)
+            .min(input_height.saturating_sub(1) as usize) as u16,
+    );
+    let cursor_width = if draft.is_empty() {
+        prefix_width
+    } else {
+        lines.last().map(line_width).unwrap_or(prefix_width)
+    };
     let cursor_x = input_area
         .x
-        .saturating_add(prefix_width)
-        .saturating_add(draft_width)
+        .saturating_add(cursor_width as u16)
         .min(input_area.right().saturating_sub(1));
-    Some((cursor_x, input_y))
+    Some((cursor_x, cursor_y))
+}
+
+fn composer_desired_height(width: u16, draft: &str, activity_visible: bool) -> u16 {
+    if width == 0 {
+        return 0;
+    }
+
+    let activity_width = if activity_visible { 2 } else { 0 };
+    let prefix_width = activity_width + UnicodeWidthStr::width(COMPOSER_LABEL);
+    let line_count =
+        u16::try_from(composer_line_count(width, draft, prefix_width)).unwrap_or(u16::MAX);
+    COMPOSER_CHROME_ROWS.saturating_add(line_count)
+}
+
+fn composer_input_lines(
+    width: u16,
+    draft: &str,
+    activity_indicator: Option<Span<'static>>,
+) -> Vec<Line<'static>> {
+    if width == 0 {
+        return Vec::new();
+    }
+
+    let prefix_width = composer_prefix_width(activity_indicator.as_ref());
+    let mut prefix = Vec::new();
+    if let Some(indicator) = activity_indicator {
+        prefix.push(indicator);
+        prefix.push(" ".into());
+    }
+    prefix.push(COMPOSER_LABEL.magenta().bold());
+
+    if draft.is_empty() {
+        return composer_wrap_line(
+            width,
+            Line::from(prefix),
+            COMPOSER_PLACEHOLDER,
+            Style::new().dim(),
+            prefix_width,
+        );
+    }
+
+    let mut lines = Vec::new();
+    for (idx, source_line) in draft.split('\n').enumerate() {
+        let prefix = if idx == 0 {
+            Line::from(prefix.clone())
+        } else {
+            Line::from(" ".repeat(prefix_width))
+        };
+        lines.extend(composer_wrap_line(
+            width,
+            prefix,
+            source_line,
+            Style::new(),
+            prefix_width,
+        ));
+    }
+    lines
+}
+
+fn composer_wrap_line(
+    width: u16,
+    first_prefix: Line<'static>,
+    text: &str,
+    text_style: Style,
+    subsequent_prefix_width: usize,
+) -> Vec<Line<'static>> {
+    let mut prefix = first_prefix;
+    composer_wrap_segments(width, text, subsequent_prefix_width)
+        .into_iter()
+        .map(|segment| {
+            let line = composer_line_with_segment(prefix.clone(), segment, text_style);
+            prefix = Line::from(" ".repeat(subsequent_prefix_width));
+            line
+        })
+        .collect()
+}
+
+fn composer_wrap_segments(width: u16, text: &str, prefix_width: usize) -> Vec<String> {
+    let capacity = (width as usize).saturating_sub(prefix_width).max(1);
+    let mut segments = Vec::new();
+    let mut segment = String::new();
+    let mut segment_width = 0usize;
+
+    for ch in text.chars() {
+        let ch_start = segment.len();
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        segment.push(ch);
+        segment_width = segment_width.saturating_add(ch_width);
+        if segment_width <= capacity {
+            continue;
+        }
+
+        if !ch.is_whitespace()
+            && let Some((break_start, break_end)) = composer_last_separator(&segment)
+        {
+            let next_segment = segment[break_end..].to_string();
+            segment.truncate(break_start);
+            segments.push(std::mem::take(&mut segment));
+            segment = next_segment;
+        } else if ch_start > 0 {
+            let next_segment = segment[ch_start..].to_string();
+            segment.truncate(ch_start);
+            segments.push(std::mem::take(&mut segment));
+            segment = next_segment;
+        } else {
+            segments.push(std::mem::take(&mut segment));
+        }
+
+        segment_width = UnicodeWidthStr::width(segment.as_str());
+    }
+
+    segments.push(segment);
+    segments
+}
+
+fn composer_last_separator(text: &str) -> Option<(usize, usize)> {
+    let mut separator_start = None;
+    let mut last_separator = None;
+
+    for (idx, ch) in text.char_indices() {
+        if ch.is_whitespace() {
+            if separator_start.is_none() && idx > 0 {
+                separator_start = Some(idx);
+            }
+        } else if let Some(start) = separator_start.take() {
+            last_separator = Some((start, idx));
+        }
+    }
+
+    last_separator
+}
+
+fn composer_line_with_segment(
+    prefix: Line<'static>,
+    segment: String,
+    text_style: Style,
+) -> Line<'static> {
+    let style = prefix.style;
+    let mut spans = prefix.spans;
+    if !segment.is_empty() {
+        spans.push(Span::styled(segment, text_style));
+    }
+    Line::from(spans).style(style)
+}
+
+fn composer_line_count(width: u16, draft: &str, prefix_width: usize) -> usize {
+    let text = if draft.is_empty() {
+        COMPOSER_PLACEHOLDER
+    } else {
+        draft
+    };
+    text.split('\n')
+        .map(|line| composer_wrap_segments(width, line, prefix_width).len())
+        .sum::<usize>()
+        .max(1)
+}
+
+fn composer_prefix_width(activity_indicator: Option<&Span<'_>>) -> usize {
+    let activity_width = activity_indicator
+        .map(|indicator| UnicodeWidthStr::width(indicator.content.as_ref()) + 1)
+        .unwrap_or_default();
+    activity_width + UnicodeWidthStr::width(COMPOSER_LABEL)
 }
 
 fn render_footer(area: Rect, buf: &mut Buffer, context: &RedesignChromeContext) {
@@ -1221,13 +1413,16 @@ fn plain_line_text(line: &Line<'_>) -> String {
 fn strip_legacy_prefix(line: Line<'static>) -> Line<'static> {
     let text = plain_line_text(&line);
     let trimmed = text.trim_start();
-    let leading_trim_bytes = text.len().saturating_sub(trimmed.len());
     for prefix in ["› ", "• ", "> "] {
         if let Some(rest) = trimmed.strip_prefix(prefix) {
             return drop_line_prefix(line, text.len().saturating_sub(rest.len()));
         }
     }
-    drop_line_prefix(line, leading_trim_bytes)
+    if text.starts_with("  ") {
+        drop_line_prefix(line, /*bytes_to_drop*/ 2)
+    } else {
+        line
+    }
 }
 
 fn drop_line_prefix(line: Line<'static>, mut bytes_to_drop: usize) -> Line<'static> {
@@ -1256,15 +1451,25 @@ fn bubble_lines(block: &TranscriptBlock, area_width: u16) -> Vec<Line<'static>> 
     let max_bubble_width = bubble_max_width(block.role, viewport_width);
     let wrap_width = max_bubble_width.saturating_sub(4).max(1);
     let mut wrapped = Vec::new();
+    let content_lines = reflow_bubble_prose_lines(&block.lines);
 
-    for line in &block.lines {
+    for line in &content_lines {
         if plain_line_text(line).trim().is_empty() {
             wrapped.push(Line::from(""));
             continue;
         }
+        let line_text = plain_line_text(line);
+        let trimmed = line_text.trim_start();
+        let leading_width = UnicodeWidthStr::width(&line_text[..line_text.len() - trimmed.len()]);
+        let wrap_options = if let Some(marker_width) = list_marker_width(trimmed) {
+            RtOptions::new(wrap_width)
+                .subsequent_indent(Line::from(" ".repeat(leading_width + marker_width)))
+        } else {
+            RtOptions::new(wrap_width)
+        };
         wrapped.extend(adaptive_wrap_lines(
             std::iter::once(line.clone()),
-            RtOptions::new(wrap_width),
+            wrap_options,
         ));
     }
     if wrapped.is_empty() {
@@ -1318,6 +1523,104 @@ fn bubble_lines(block: &TranscriptBlock, area_width: u16) -> Vec<Line<'static>> 
         Span::styled(format!("╰{}╯", "─".repeat(inner_width + 2)), border_style),
     ]));
     lines
+}
+
+fn reflow_bubble_prose_lines(lines: &[Line<'static>]) -> Vec<Line<'static>> {
+    let mut out = Vec::new();
+    let mut prose_run: Option<Line<'static>> = None;
+
+    for line in lines {
+        if let Some(run) = prose_run.as_mut()
+            && is_list_continuation_line(line)
+        {
+            run.spans.push(" ".into());
+            run.spans
+                .extend(drop_line_prefix(line.clone(), leading_whitespace_bytes(line)).spans);
+            continue;
+        }
+
+        let is_plain_prose = is_plain_prose_line(line);
+        if starts_bubble_list_run(line)
+            || (is_plain_prose && (prose_run.is_some() || starts_bubble_prose_run(line)))
+        {
+            if let Some(run) = prose_run.as_mut() {
+                run.spans.push(" ".into());
+                run.spans.extend(line.spans.clone());
+            } else {
+                prose_run = Some(line.clone());
+            }
+            continue;
+        }
+
+        if let Some(run) = prose_run.take() {
+            out.push(run);
+        }
+        out.push(line.clone());
+    }
+
+    if let Some(run) = prose_run {
+        out.push(run);
+    }
+
+    out
+}
+
+fn starts_bubble_list_run(line: &Line<'_>) -> bool {
+    list_marker_width(plain_line_text(line).trim_start()).is_some()
+}
+
+fn is_list_continuation_line(line: &Line<'_>) -> bool {
+    let text = plain_line_text(line);
+    text.chars().next().is_some_and(char::is_whitespace)
+        && !text.trim().is_empty()
+        && !is_structural_text_line(text.trim_start())
+}
+
+fn leading_whitespace_bytes(line: &Line<'_>) -> usize {
+    let text = plain_line_text(line);
+    text.len().saturating_sub(text.trim_start().len())
+}
+
+fn is_plain_prose_line(line: &Line<'_>) -> bool {
+    let text = plain_line_text(line);
+    if text.trim().is_empty() || text.chars().next().is_some_and(char::is_whitespace) {
+        return false;
+    }
+
+    let trimmed = text.trim_start();
+    !is_structural_text_line(trimmed)
+}
+
+fn starts_bubble_prose_run(line: &Line<'_>) -> bool {
+    let text = plain_line_text(line);
+    let trimmed = text.trim_end();
+    trimmed.ends_with('-')
+        || trimmed.contains(',')
+        || trimmed
+            .split_whitespace()
+            .any(|token| token.chars().filter(|ch| ch.is_alphabetic()).count() >= 7)
+}
+
+fn is_structural_text_line(text: &str) -> bool {
+    text.starts_with(['>', '|', '#'])
+        || text.starts_with("```")
+        || text.starts_with("---")
+        || text.starts_with("***")
+        || text.starts_with("- ")
+        || text.starts_with("* ")
+        || text.starts_with("+ ")
+        || list_marker_width(text).is_some()
+}
+
+fn list_marker_width(text: &str) -> Option<usize> {
+    if text.starts_with("- ") || text.starts_with("* ") || text.starts_with("+ ") {
+        return Some(2);
+    }
+
+    let marker_end = text.find(". ")?;
+    let marker = &text[..marker_end];
+    (!marker.is_empty() && marker.chars().all(|ch| ch.is_ascii_digit()))
+        .then_some(marker_end.saturating_add(2))
 }
 
 fn styled_bubble_content_spans(line: Line<'static>, bubble_style: Style) -> Vec<Span<'static>> {
@@ -1604,6 +1907,41 @@ mod tests {
         terminal.backend().to_string()
     }
 
+    fn render_composer_fixture(width: u16, height: u16, draft: &str) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                render_background(area, frame.buffer_mut());
+                render_composer(
+                    area,
+                    frame.buffer_mut(),
+                    draft,
+                    /*activity_indicator*/ None,
+                );
+            })
+            .expect("draw");
+        terminal.backend().to_string()
+    }
+
+    fn render_composer_cursor(width: u16, height: u16, draft: &str) -> (u16, u16) {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+        let mut cursor = None;
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                render_background(area, frame.buffer_mut());
+                cursor = render_composer(
+                    area,
+                    frame.buffer_mut(),
+                    draft,
+                    /*activity_indicator*/ None,
+                );
+            })
+            .expect("draw");
+        cursor.expect("cursor")
+    }
+
     #[test]
     fn wide_chrome_snapshot() {
         assert_snapshot!("redesign_chrome_wide_100x24", render_fixture(100, 24));
@@ -1632,6 +1970,58 @@ mod tests {
             "redesign_chrome_focused_sidebar_72x18",
             render_fixture_with_sidebar(72, 18, sidebar)
         );
+    }
+
+    #[test]
+    fn wrapped_composer_snapshot() {
+        let draft = "Please review the recently modified rendering code before shipping.";
+        assert_snapshot!(
+            "redesign_chrome_wrapped_composer_44x4",
+            render_composer_fixture(
+                /*width*/ 44,
+                composer_desired_height(/*width*/ 44, draft, /*activity_visible*/ false),
+                draft,
+            )
+        );
+    }
+
+    #[test]
+    fn composer_height_grows_for_wrapped_draft() {
+        let draft = "Please review the recently modified rendering code before shipping.";
+
+        assert!(composer_desired_height(/*width*/ 32, draft, /*activity_visible*/ false) > 3);
+    }
+
+    #[test]
+    fn composer_input_area_uses_distinct_background() {
+        let mut terminal =
+            Terminal::new(TestBackend::new(/*width*/ 24, /*height*/ 4)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                render_background(area, frame.buffer_mut());
+                render_composer(
+                    area,
+                    frame.buffer_mut(),
+                    "draft",
+                    /*activity_indicator*/ None,
+                );
+            })
+            .expect("draw");
+
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(0, 0)].bg, Color::Black);
+        assert_eq!(buffer[(0, 1)].bg, COMPOSER_INPUT_BG);
+        assert_eq!(buffer[(0, 2)].bg, COMPOSER_INPUT_BG);
+        assert_eq!(buffer[(0, 3)].bg, Color::Black);
+    }
+
+    #[test]
+    fn composer_cursor_advances_for_trailing_space() {
+        let before = render_composer_cursor(/*width*/ 24, /*height*/ 3, "hello");
+        let after = render_composer_cursor(/*width*/ 24, /*height*/ 3, "hello ");
+
+        assert_eq!(after, (before.0 + 1, before.1));
     }
 
     #[test]
@@ -1669,10 +2059,63 @@ mod tests {
     }
 
     #[test]
-    fn product_version_label_uses_codex_cli_version() {
+    fn bubble_lines_reflow_prewrapped_prose() {
+        let block = TranscriptBlock {
+            role: TranscriptRole::Codex,
+            lines: vec![
+                Line::from("It supports interactive"),
+                Line::from("terminal"),
+                Line::from("use, non-interactive"),
+                Line::from("automation, MCP"),
+            ],
+        };
+
+        let lines = bubble_lines(&block, /*area_width*/ 44)
+            .iter()
+            .map(plain_line_text)
+            .collect::<Vec<_>>();
+
+        assert!(
+            lines.iter().any(|line| line.contains("terminal use,")),
+            "expected prose to reflow into fuller bubble lines, got: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn bubble_lines_reflow_prewrapped_ordered_list() {
+        let block = TranscriptBlock {
+            role: TranscriptRole::Codex,
+            lines: vec![
+                Line::from("2. Core agent logic lives in"),
+                Line::from("   crates"),
+                Line::from("   like codex-core, but new"),
+                Line::from("   code should avoid bloating"),
+                Line::from("   it."),
+            ],
+        };
+
+        let lines = bubble_lines(&block, /*area_width*/ 44)
+            .iter()
+            .map(plain_line_text)
+            .collect::<Vec<_>>();
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("crates like codex-core")),
+            "expected ordered-list continuations to reflow into fuller bubble lines, got: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn product_version_label_uses_source_build_label_for_dev_version() {
         assert_eq!(
             product_version_label("CODEX_CLI"),
-            format!("CODEX_CLI v{CODEX_CLI_VERSION}")
+            if is_source_build_version_label(CODEX_CLI_VERSION) {
+                "CODEX_CLI dev".to_string()
+            } else {
+                format!("CODEX_CLI v{CODEX_CLI_VERSION}")
+            }
         );
     }
 

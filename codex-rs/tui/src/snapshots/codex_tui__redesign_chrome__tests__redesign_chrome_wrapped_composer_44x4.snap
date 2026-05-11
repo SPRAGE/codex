@@ -1,0 +1,9 @@
+---
+source: tui/src/redesign_chrome.rs
+assertion_line: 1753
+expression: "render_composer_fixture(44, composer_desired_height(44, draft, false), draft)"
+---
+"--------------------------------------------"
+"MSG> Please review the recently modified    "
+"     rendering code before shipping.        "
+"--------------------------------------------"
