@@ -1,0 +1,23 @@
+---
+source: tui/src/redesign_chrome.rs
+assertion_line: 1631
+expression: "render_fixture_with_sidebar(72, 18, sidebar)"
+---
+"CODEX_CLI v0.0.0                                                        "
+"------------------------------------------------------------------------"
+" CHATS               |--------------------------------------------------"
+" C-B close           |gpt-5.4 xhigh | ctx 72% left | tok in 1.2K / ou..."
+"                     |               ╭───────────────────────────────╮ |"
+"  active Main [def...|               │ Let's redesign the TUI to be  │ |"
+"› unread Scout [ex...|               │ more intuitive for CLI users. │ |"
+"  needs  Patch [wo...|               ╰───────────────────────────────╯ |"
+"                     |                                                 |"
+" ACTIONS             | Codex                                           |"
+"  N      NEW CHAT    | ╭───────────────────────────────────╮           |"
+"  F      FINAL ONLY O| │ Agreed. I'll focus on information │           |"
+"  F2     COMMANDS    | │ density and clear keyboard        │           |"
+"  F4     MODELS      | │ shortcuts.                        │           |"
+"  C-R    HISTORY     | ╰───────────────────────────────────╯           #"
+"  C-T    TRANSCRIPT  |--------------------------------------------------"
+"  C-G    EDITOR      |⠋ MSG> Describe the next change...                "
+"~/codes/codex · redesign-tui · 3 f...  F1 help  C-T transcript  C-C exit"

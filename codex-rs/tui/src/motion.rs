@@ -46,6 +46,20 @@ pub(crate) fn activity_indicator(
     }
 }
 
+pub(crate) fn rotating_activity_indicator(
+    start_time: Option<Instant>,
+    motion_mode: MotionMode,
+    reduced_motion_indicator: ReducedMotionIndicator,
+) -> Option<Span<'static>> {
+    match motion_mode {
+        MotionMode::Animated => Some(animated_rotating_activity_indicator(start_time)),
+        MotionMode::Reduced => match reduced_motion_indicator {
+            ReducedMotionIndicator::Hidden => None,
+            ReducedMotionIndicator::StaticBullet => Some("•".dim()),
+        },
+    }
+}
+
 pub(crate) fn shimmer_text(text: &str, motion_mode: MotionMode) -> Vec<Span<'static>> {
     match motion_mode {
         MotionMode::Animated => shimmer_spans(text),
@@ -73,6 +87,13 @@ fn animated_activity_indicator(start_time: Option<Instant>) -> Span<'static> {
         let blink_on = (elapsed.as_millis() / 600).is_multiple_of(2);
         if blink_on { "•".into() } else { "◦".dim() }
     }
+}
+
+fn animated_rotating_activity_indicator(start_time: Option<Instant>) -> Span<'static> {
+    const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let elapsed = start_time.map(|st| st.elapsed()).unwrap_or_default();
+    let frame = (elapsed.as_millis() / 80) as usize % FRAMES.len();
+    FRAMES[frame].cyan()
 }
 
 #[cfg(test)]
@@ -103,6 +124,18 @@ mod tests {
             ),
             Some("•".dim())
         );
+    }
+
+    #[test]
+    fn rotating_activity_indicator_uses_spinner_frame() {
+        let indicator = rotating_activity_indicator(
+            /*start_time*/ None,
+            MotionMode::Animated,
+            ReducedMotionIndicator::Hidden,
+        )
+        .expect("animated indicator");
+
+        assert_eq!(indicator.content.as_ref(), "⠋");
     }
 
     #[test]

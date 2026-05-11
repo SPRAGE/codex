@@ -1,0 +1,26 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-tui-redesign"
+version.workspace = true
+
+[lib]
+name = "codex_tui_redesign"
+path = "src/lib.rs"
+doctest = false
+
+[[bin]]
+name = "codex-tui-redesign"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+crossterm = { workspace = true }
+ratatui = { workspace = true }
+textwrap = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }
+pretty_assertions = { workspace = true }

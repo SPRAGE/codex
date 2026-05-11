@@ -1,0 +1,23 @@
+---
+source: tui/src/redesign_chrome.rs
+assertion_line: 1622
+expression: "render_fixture(72, 18)"
+---
+"CODEX_CLI v0.0.0                                                        "
+"------------------------------------------------------------------------"
+"------------------------------------------------------------------------"
+"chat gpt-5.4 xhigh  ctx 72% left  tokens in 1.2K / out 900 / total 2.25K"
+"                                                                   You  "
+"                   ╭─────────────────────────────────────────────────╮  "
+"                   │ Let's redesign the TUI to be more intuitive for │  "
+"                   │ CLI users.                                      │  "
+"                   ╰─────────────────────────────────────────────────╯  "
+"                                                                        "
+" Codex                                                                  "
+" ╭─────────────────────────────────────────────────────╮                "
+" │ Agreed. I'll focus on information density and clear │                "
+" │ keyboard shortcuts.                                 │                "
+" ╰─────────────────────────────────────────────────────╯                "
+"------------------------------------------------------------------------"
+"⠋ MSG> Describe the next change...                                      "
+"~/codes/codex · redesign-tui · 3 f...  F1 help  C-T transcript  C-C exit"

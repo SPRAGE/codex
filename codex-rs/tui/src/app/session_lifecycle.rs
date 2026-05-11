@@ -121,6 +121,14 @@ impl App {
         );
         self.agent_navigation
             .upsert(thread_id, agent_nickname, agent_role, is_closed);
+        if is_closed {
+            self.redesign_chat_activity
+                .insert(thread_id, redesign_chrome::RedesignChatActivity::Closed);
+        } else {
+            self.redesign_chat_activity
+                .entry(thread_id)
+                .or_insert(redesign_chrome::RedesignChatActivity::Idle);
+        }
         self.sync_active_agent_label();
     }
 
@@ -130,6 +138,8 @@ impl App {
     /// transcripts, and the stable next/previous traversal order should not collapse around them.
     pub(super) fn mark_agent_picker_thread_closed(&mut self, thread_id: ThreadId) {
         self.agent_navigation.mark_closed(thread_id);
+        self.redesign_chat_activity
+            .insert(thread_id, redesign_chrome::RedesignChatActivity::Closed);
         self.sync_active_agent_label();
     }
 
@@ -145,6 +155,7 @@ impl App {
             .await
         {
             Ok(thread) => {
+                self.remember_redesign_chat_name(thread_id, thread.name.as_deref());
                 self.upsert_agent_picker_thread(
                     thread_id,
                     thread.agent_nickname.or_else(|| {
@@ -247,6 +258,7 @@ impl App {
                 (session, turns, false)
             }
         };
+        self.remember_redesign_chat_name(thread_id, session.thread_name.as_deref());
         let channel = self.ensure_thread_channel(thread_id);
         let mut store = channel.store.lock().await;
         store.set_session(session, turns);
@@ -286,6 +298,7 @@ impl App {
         thread_id: ThreadId,
     ) -> Result<()> {
         if self.active_thread_id == Some(thread_id) {
+            self.mark_redesign_chat_seen(thread_id);
             return Ok(());
         }
 
@@ -350,6 +363,7 @@ impl App {
 
         self.active_thread_id = Some(thread_id);
         self.active_thread_rx = Some(receiver);
+        self.mark_redesign_chat_seen(thread_id);
 
         let init = self.chatwidget_init_for_forked_or_resumed_thread(
             tui,
@@ -411,6 +425,11 @@ impl App {
         self.thread_event_channels.clear();
         self.agent_navigation.clear();
         self.side_threads.clear();
+        self.redesign_chat_names.clear();
+        self.redesign_chat_activity.clear();
+        self.redesign_chat_unread.clear();
+        self.pending_redesign_chat_notifications.clear();
+        self.redesign_transcript_scroll = 0;
         self.active_thread_id = None;
         self.active_thread_rx = None;
         self.primary_thread_id = None;
@@ -488,6 +507,72 @@ impl App {
             }
         }
         tui.frame_requester().schedule_frame();
+    }
+
+    pub(super) async fn start_redesign_chat(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+    ) -> Result<()> {
+        self.refresh_in_memory_config_from_disk_best_effort("starting a new chat")
+            .await;
+
+        if let Some(thread_id) = self.existing_redesign_new_chat_thread_id() {
+            if self.current_displayed_thread_id() == Some(thread_id) {
+                return Ok(());
+            }
+            self.select_agent_thread_and_discard_side(tui, app_server, thread_id)
+                .await?;
+            return Ok(());
+        }
+
+        let previous_thread_id = self.active_thread_id.or(self.chat_widget.thread_id());
+        if let Some(thread_id) = previous_thread_id {
+            let existing_entry = self.agent_navigation.get(&thread_id).cloned();
+            let agent_nickname = existing_entry
+                .as_ref()
+                .and_then(|entry| entry.agent_nickname.clone())
+                .or_else(|| self.redesign_thread_display_name(thread_id));
+            let agent_role = existing_entry
+                .as_ref()
+                .and_then(|entry| entry.agent_role.clone());
+            let is_closed = existing_entry.as_ref().is_some_and(|entry| entry.is_closed);
+            self.upsert_agent_picker_thread(thread_id, agent_nickname, agent_role, is_closed);
+        }
+
+        let previous_config = self.config.clone();
+        let config = self.fresh_session_config();
+        self.config = config.clone();
+        self.store_active_thread_receiver().await;
+        self.active_thread_id = None;
+        self.active_thread_rx = None;
+
+        let started = match app_server.start_thread(&config).await {
+            Ok(started) => started,
+            Err(err) => {
+                self.config = previous_config;
+                if let Some(thread_id) = previous_thread_id {
+                    self.activate_thread_channel(thread_id).await;
+                }
+                return Err(err);
+            }
+        };
+
+        let init = self.chatwidget_init_for_forked_or_resumed_thread(
+            tui,
+            self.config.clone(),
+            /*initial_user_message*/ None,
+        );
+        self.replace_chat_widget(ChatWidget::new_with_app_event(init));
+        let reset_error = self.reset_for_thread_switch(tui).err();
+        self.enqueue_primary_thread_session(started.session, started.turns)
+            .await?;
+        if let Some(err) = reset_error {
+            tracing::warn!(error = %err, "failed to clear terminal while starting redesign chat");
+            self.chat_widget
+                .add_error_message(format!("Failed to redraw new chat: {err}"));
+        }
+        Ok(())
     }
 
     pub(super) async fn replace_chat_widget_with_app_server_thread(
@@ -571,6 +656,7 @@ impl App {
         }
 
         for thread in find_loaded_subagent_threads_for_primary(threads, primary_thread_id) {
+            self.remember_redesign_chat_name(thread.thread_id, thread.name.as_deref());
             self.upsert_agent_picker_thread(
                 thread.thread_id,
                 thread.agent_nickname,

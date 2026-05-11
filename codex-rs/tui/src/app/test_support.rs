@@ -7,7 +7,7 @@
 use super::*;
 use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
 
-pub(super) async fn make_test_app() -> App {
+pub(crate) async fn make_test_app() -> App {
     let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
     let config = chat_widget.config_ref().clone();
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
@@ -62,6 +62,14 @@ pub(super) async fn make_test_app() -> App {
         pending_app_server_requests: PendingAppServerRequests::default(),
         pending_plugin_enabled_writes: HashMap::new(),
         pending_hook_enabled_writes: HashMap::new(),
+        redesign_chrome_enabled: false,
+        redesign_sidebar_state: redesign_chrome::RedesignSidebarState::default(),
+        redesign_transcript_scroll: 0,
+        redesign_final_only_transcript: false,
+        redesign_chat_names: HashMap::new(),
+        redesign_chat_activity: HashMap::new(),
+        redesign_chat_unread: HashSet::new(),
+        pending_redesign_chat_notifications: VecDeque::new(),
     }
 }
 

@@ -7,6 +7,14 @@
 use super::*;
 use crate::session_resume::read_session_model;
 
+const REDESIGN_NEW_CHAT_LABEL: &str = "New Chat";
+const LEGACY_UNNAMED_THREAD_LABEL: &str = "New thread";
+
+fn redesign_display_thread_name(thread_name: Option<&str>) -> Option<String> {
+    let thread_name = crate::legacy_core::util::normalize_thread_name(thread_name?)?;
+    (thread_name != LEGACY_UNNAMED_THREAD_LABEL).then_some(thread_name)
+}
+
 impl App {
     pub(super) async fn shutdown_current_thread(&mut self, app_server: &mut AppServerSession) {
         if let Some(thread_id) = self.chat_widget.thread_id() {
@@ -52,6 +60,7 @@ impl App {
         if self.active_thread_id.is_some() {
             return;
         }
+        self.mark_redesign_chat_seen(thread_id);
         self.set_thread_active(thread_id, /*active*/ true).await;
         let receiver = if let Some(channel) = self.thread_event_channels.get_mut(&thread_id) {
             channel.receiver.take()
@@ -123,30 +132,194 @@ impl App {
         store.active_turn_id().map(ToOwned::to_owned)
     }
 
-    pub(super) fn thread_label(&self, thread_id: ThreadId) -> String {
-        let is_primary = self.primary_thread_id == Some(thread_id);
-        let fallback_label = if is_primary {
-            "Main [default]".to_string()
+    pub(super) fn remember_redesign_chat_name(
+        &mut self,
+        thread_id: ThreadId,
+        thread_name: Option<&str>,
+    ) {
+        if let Some(thread_name) = redesign_display_thread_name(thread_name) {
+            self.redesign_chat_names.insert(thread_id, thread_name);
         } else {
-            let thread_id = thread_id.to_string();
-            let short_id: String = thread_id.chars().take(8).collect();
-            format!("Agent ({short_id})")
-        };
+            self.redesign_chat_names.remove(&thread_id);
+        }
+    }
+
+    pub(super) fn redesign_thread_display_name(&self, thread_id: ThreadId) -> Option<String> {
+        if self.current_displayed_thread_id() == Some(thread_id)
+            && let Some(thread_name) =
+                redesign_display_thread_name(self.chat_widget.thread_name().as_deref())
+        {
+            return Some(thread_name);
+        }
+        self.redesign_chat_names.get(&thread_id).cloned()
+    }
+
+    pub(super) fn thread_label(&self, thread_id: ThreadId) -> String {
+        if let Some(thread_name) = self.redesign_thread_display_name(thread_id) {
+            return thread_name;
+        }
         if let Some(entry) = self.agent_navigation.get(&thread_id) {
             let label = format_agent_picker_item_name(
                 entry.agent_nickname.as_deref(),
                 entry.agent_role.as_deref(),
-                is_primary,
+                self.primary_thread_id == Some(thread_id),
             );
-            if label == "Agent" {
-                let thread_id = thread_id.to_string();
-                let short_id: String = thread_id.chars().take(8).collect();
-                format!("{label} ({short_id})")
-            } else {
-                label
+            if !matches!(label.as_str(), "Agent" | "Main [default]") {
+                return label;
             }
-        } else {
-            fallback_label
+        }
+        if self.primary_thread_id == Some(thread_id)
+            || self.agent_navigation.get(&thread_id).is_some()
+        {
+            return REDESIGN_NEW_CHAT_LABEL.to_string();
+        }
+
+        let thread_id = thread_id.to_string();
+        let short_id: String = thread_id.chars().take(8).collect();
+        format!("Agent ({short_id})")
+    }
+
+    pub(super) fn existing_redesign_new_chat_thread_id(&self) -> Option<ThreadId> {
+        let current_thread_id = self.current_displayed_thread_id();
+        if current_thread_id
+            .is_some_and(|thread_id| self.redesign_thread_is_open_new_chat(thread_id))
+        {
+            return current_thread_id;
+        }
+
+        self.agent_navigation
+            .ordered_threads()
+            .into_iter()
+            .find_map(|(thread_id, _)| {
+                self.redesign_thread_is_open_new_chat(thread_id)
+                    .then_some(thread_id)
+            })
+    }
+
+    fn redesign_thread_is_open_new_chat(&self, thread_id: ThreadId) -> bool {
+        if self
+            .agent_navigation
+            .get(&thread_id)
+            .is_some_and(|entry| entry.is_closed)
+        {
+            return false;
+        }
+        self.thread_label(thread_id) == REDESIGN_NEW_CHAT_LABEL
+    }
+
+    pub(crate) fn redesign_chat_entries(&self) -> Vec<redesign_chrome::RedesignChatListEntry> {
+        self.agent_navigation
+            .ordered_threads()
+            .into_iter()
+            .map(|(thread_id, entry)| {
+                let activity = self
+                    .redesign_chat_activity
+                    .get(&thread_id)
+                    .copied()
+                    .unwrap_or(if entry.is_closed {
+                        redesign_chrome::RedesignChatActivity::Closed
+                    } else {
+                        redesign_chrome::RedesignChatActivity::Idle
+                    });
+                redesign_chrome::RedesignChatListEntry {
+                    thread_id,
+                    label: self.thread_label(thread_id),
+                    activity,
+                    is_active: self.active_thread_id == Some(thread_id),
+                    unread: self.redesign_chat_unread.contains(&thread_id)
+                        && self.active_thread_id != Some(thread_id),
+                }
+            })
+            .collect()
+    }
+
+    pub(super) fn mark_redesign_chat_seen(&mut self, thread_id: ThreadId) {
+        self.redesign_chat_unread.remove(&thread_id);
+    }
+
+    pub(super) fn maybe_post_pending_redesign_chat_notifications(&mut self, tui: &mut tui::Tui) {
+        while let Some(message) = self.pending_redesign_chat_notifications.pop_front() {
+            tui.notify(message);
+        }
+    }
+
+    pub(super) fn note_redesign_chat_notification(
+        &mut self,
+        thread_id: ThreadId,
+        notification: &ServerNotification,
+    ) {
+        let active = self.active_thread_id == Some(thread_id);
+        match notification {
+            ServerNotification::TurnStarted(_) => {
+                self.redesign_chat_activity
+                    .insert(thread_id, redesign_chrome::RedesignChatActivity::Working);
+                if !active {
+                    self.redesign_chat_unread.insert(thread_id);
+                }
+            }
+            ServerNotification::TurnCompleted(notification) => {
+                let activity = match notification.turn.status {
+                    TurnStatus::Completed => redesign_chrome::RedesignChatActivity::Done,
+                    TurnStatus::Failed => redesign_chrome::RedesignChatActivity::Failed,
+                    TurnStatus::Interrupted => redesign_chrome::RedesignChatActivity::Idle,
+                    TurnStatus::InProgress => redesign_chrome::RedesignChatActivity::Working,
+                };
+                self.redesign_chat_activity.insert(thread_id, activity);
+                if !active {
+                    self.redesign_chat_unread.insert(thread_id);
+                    self.queue_redesign_chat_completion_notification(thread_id, activity);
+                }
+            }
+            ServerNotification::ThreadClosed(_) => {
+                self.redesign_chat_activity
+                    .insert(thread_id, redesign_chrome::RedesignChatActivity::Closed);
+            }
+            ServerNotification::Error(_) => {
+                self.redesign_chat_activity
+                    .insert(thread_id, redesign_chrome::RedesignChatActivity::Failed);
+                if !active {
+                    self.redesign_chat_unread.insert(thread_id);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn note_redesign_chat_request(&mut self, thread_id: ThreadId) {
+        self.redesign_chat_activity
+            .insert(thread_id, redesign_chrome::RedesignChatActivity::NeedsInput);
+        if self.active_thread_id != Some(thread_id) {
+            self.redesign_chat_unread.insert(thread_id);
+        }
+    }
+
+    fn queue_redesign_chat_completion_notification(
+        &mut self,
+        thread_id: ThreadId,
+        activity: redesign_chrome::RedesignChatActivity,
+    ) {
+        if !self.redesign_agent_turn_notifications_enabled() {
+            return;
+        }
+
+        let label = self.thread_label(thread_id);
+        let message = match activity {
+            redesign_chrome::RedesignChatActivity::Done => format!("{label} completed."),
+            redesign_chrome::RedesignChatActivity::Failed => format!("{label} failed."),
+            redesign_chrome::RedesignChatActivity::Idle => format!("{label} stopped."),
+            redesign_chrome::RedesignChatActivity::Working
+            | redesign_chrome::RedesignChatActivity::NeedsInput
+            | redesign_chrome::RedesignChatActivity::Closed => return,
+        };
+        self.pending_redesign_chat_notifications.push_back(message);
+    }
+
+    fn redesign_agent_turn_notifications_enabled(&self) -> bool {
+        match &self.config.tui_notifications.notifications {
+            codex_config::types::Notifications::Enabled(enabled) => *enabled,
+            codex_config::types::Notifications::Custom(allowed) => {
+                allowed.iter().any(|item| item == "agent-turn-complete")
+            }
         }
     }
 
@@ -798,6 +971,21 @@ impl App {
         thread_id: ThreadId,
         notification: ServerNotification,
     ) -> Result<()> {
+        let updated_thread_name = match &notification {
+            ServerNotification::ThreadNameUpdated(notification) => {
+                Some(notification.thread_name.clone())
+            }
+            _ => None,
+        };
+        if let Some(thread_name) = updated_thread_name.as_ref() {
+            self.remember_redesign_chat_name(thread_id, thread_name.as_deref());
+            if self.primary_thread_id == Some(thread_id)
+                && let Some(session) = self.primary_session_configured.as_mut()
+            {
+                session.thread_name = thread_name.clone();
+            }
+        }
+        self.note_redesign_chat_notification(thread_id, &notification);
         let inferred_session = self
             .infer_session_for_thread_notification(thread_id, &notification)
             .await;
@@ -812,6 +1000,11 @@ impl App {
                 && let Some(session) = inferred_session
             {
                 guard.session = Some(session);
+            }
+            if let Some(thread_name) = updated_thread_name.as_ref()
+                && let Some(session) = guard.session.as_mut()
+            {
+                session.thread_name = thread_name.clone();
             }
             guard.push_notification(notification.clone());
             (guard.active, guard.side_parent_pending_status())
@@ -884,6 +1077,7 @@ impl App {
                 .await
             {
                 Ok(thread) => {
+                    self.remember_redesign_chat_name(thread_id, thread.name.as_deref());
                     self.upsert_agent_picker_thread(
                         thread_id,
                         thread.agent_nickname,
@@ -913,6 +1107,7 @@ impl App {
         let mut session = self.primary_session_configured.clone()?;
         session.thread_id = thread_id;
         session.thread_name = notification.thread.name.clone();
+        self.remember_redesign_chat_name(thread_id, session.thread_name.as_deref());
         session.model_provider_id = notification.thread.model_provider.clone();
         session.cwd = notification.thread.cwd.clone();
         let rollout_path = notification.thread.path.clone();
@@ -939,6 +1134,7 @@ impl App {
         thread_id: ThreadId,
         request: ServerRequest,
     ) -> Result<()> {
+        self.note_redesign_chat_request(thread_id);
         let inactive_interactive_request = if self.active_thread_id != Some(thread_id) {
             self.interactive_request_for_thread_request(thread_id, &request)
                 .await
@@ -1033,6 +1229,7 @@ impl App {
         turns: Vec<Turn>,
     ) -> Result<()> {
         let thread_id = session.thread_id;
+        self.remember_redesign_chat_name(thread_id, session.thread_name.as_deref());
         self.primary_thread_id = Some(thread_id);
         self.primary_session_configured = Some(session.clone());
         self.upsert_agent_picker_thread(

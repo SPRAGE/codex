@@ -651,6 +651,11 @@ struct StatusIndicatorState {
     details_max_lines: usize,
 }
 
+pub(crate) struct RedesignActiveCellDisplay {
+    pub(crate) lines: Vec<Line<'static>>,
+    pub(crate) is_stream_continuation: bool,
+}
+
 impl StatusIndicatorState {
     fn working() -> Self {
         Self {
@@ -6546,10 +6551,8 @@ impl ChatWidget {
                 reasoning_effort,
                 agents_states,
             }),
-            ThreadItem::EnteredReviewMode { review, .. } => {
-                if !from_replay {
-                    self.enter_review_mode_with_hint(review, /*from_replay*/ false);
-                }
+            ThreadItem::EnteredReviewMode { review, .. } if !from_replay => {
+                self.enter_review_mode_with_hint(review, /*from_replay*/ false);
             }
             _ => {}
         }
@@ -9293,6 +9296,7 @@ impl ChatWidget {
     /// Does not touch the active Plan mask — Plan reasoning is controlled
     /// exclusively by the Plan preset and `set_plan_mode_reasoning_effort`.
     pub(crate) fn set_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
+        self.config.model_reasoning_effort = effort;
         self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
             /*model*/ None,
             Some(effort),
@@ -9366,6 +9370,7 @@ impl ChatWidget {
 
     /// Set the model in the widget's config copy and stored collaboration mode.
     pub(crate) fn set_model(&mut self, model: &str) {
+        self.config.model = (!model.trim().is_empty()).then(|| model.to_string());
         self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
             Some(model.to_string()),
             /*effort*/ None,
@@ -9588,6 +9593,7 @@ impl ChatWidget {
     fn refresh_model_dependent_surfaces(&mut self) {
         self.refresh_model_display();
         self.refresh_status_line();
+        self.request_redraw();
     }
 
     fn model_display_name(&self) -> &str {
@@ -10863,6 +10869,123 @@ impl ChatWidget {
         &self.config
     }
 
+    pub(crate) fn redesign_context_remaining_percent(&self) -> Option<i64> {
+        self.status_line_context_remaining_percent()
+    }
+
+    pub(crate) fn redesign_model_label(&self) -> String {
+        self.model_display_name().to_string()
+    }
+
+    pub(crate) fn redesign_reasoning_effort_label(&self) -> String {
+        self.effective_reasoning_effort()
+            .map(|effort| effort.to_string())
+            .unwrap_or_else(|| "default".to_string())
+    }
+
+    pub(crate) fn status_line_branch_name(&self) -> Option<&str> {
+        self.status_line_branch.as_deref()
+    }
+
+    pub(crate) fn branch_change_summary(&self) -> Option<String> {
+        let stats = self
+            .status_line_git_summary
+            .as_ref()
+            .and_then(|summary| summary.branch_change_stats.as_ref())?;
+        Some(format!("+{} -{}", stats.additions, stats.deletions))
+    }
+
+    pub(crate) fn redesign_active_final_output_display(
+        &self,
+        width: u16,
+    ) -> Option<RedesignActiveCellDisplay> {
+        let cell = self.active_cell.as_ref()?;
+        if !is_redesign_final_output_cell(cell.as_ref()) {
+            return None;
+        }
+        let lines = cell.display_lines(width);
+        (!lines.is_empty()).then_some(RedesignActiveCellDisplay {
+            lines,
+            is_stream_continuation: cell.is_stream_continuation(),
+        })
+    }
+
+    pub(crate) fn redesign_active_system_display(
+        &self,
+        width: u16,
+    ) -> Option<RedesignActiveCellDisplay> {
+        let mut lines = Vec::new();
+        let mut is_stream_continuation = false;
+        if let Some(cell) = self.active_cell.as_ref()
+            && !is_redesign_startup_cell(cell.as_ref())
+            && !is_redesign_final_output_cell(cell.as_ref())
+        {
+            is_stream_continuation = cell.is_stream_continuation();
+            lines.extend(cell.display_lines(width));
+        }
+        if let Some(hook_cell) = self.active_hook_cell.as_ref()
+            && hook_cell.should_render()
+        {
+            let hook_lines = hook_cell.display_lines(width);
+            if !hook_lines.is_empty() && !lines.is_empty() {
+                lines.push("".into());
+            }
+            lines.extend(hook_lines);
+        }
+        (!lines.is_empty()).then_some(RedesignActiveCellDisplay {
+            lines,
+            is_stream_continuation,
+        })
+    }
+
+    pub(crate) fn redesign_task_running(&self) -> bool {
+        self.bottom_pane.is_task_running()
+    }
+
+    pub(crate) fn redesign_animations_enabled(&self) -> bool {
+        self.config.animations
+    }
+
+    pub(crate) fn redesign_work_started_at(&self) -> Option<Instant> {
+        self.goal_status_active_turn_started_at
+    }
+
+    pub(crate) fn redesign_schedule_work_indicator_frame_if_needed(&self) {
+        if self.config.animations && self.bottom_pane.is_task_running() {
+            self.frame_requester
+                .schedule_frame_in(Duration::from_millis(100));
+        }
+    }
+
+    pub(crate) fn redesign_composer_text(&self) -> String {
+        self.bottom_pane.composer_text_with_pending()
+    }
+
+    pub(crate) fn redesign_should_render_bottom_pane(&self) -> bool {
+        !self.bottom_pane.no_modal_or_popup_active()
+            || self.bottom_pane.has_active_view()
+            || self.bottom_pane.composer_text().starts_with('/')
+    }
+
+    pub(crate) fn redesign_bottom_pane_desired_height(&self, width: u16) -> u16 {
+        self.bottom_pane.desired_height(width)
+    }
+
+    pub(crate) fn render_redesign_bottom_pane(&self, area: Rect, buf: &mut Buffer) {
+        self.bottom_pane.render(area, buf);
+    }
+
+    pub(crate) fn redesign_bottom_pane_cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        self.bottom_pane.cursor_pos(area)
+    }
+
+    pub(crate) fn redesign_bottom_pane_cursor_style(
+        &self,
+        area: Rect,
+    ) -> crossterm::cursor::SetCursorStyle {
+        self.bottom_pane.cursor_style(area)
+    }
+
     #[cfg(test)]
     pub(crate) fn status_line_text(&self) -> Option<String> {
         self.bottom_pane.status_line_text()
@@ -10924,6 +11047,16 @@ fn has_websocket_timing_metrics(summary: RuntimeMetricsSummary) -> bool {
         || summary.responses_api_engine_service_ttft_ms > 0
         || summary.responses_api_engine_iapi_tbt_ms > 0
         || summary.responses_api_engine_service_tbt_ms > 0
+}
+
+fn is_redesign_startup_cell(cell: &dyn HistoryCell) -> bool {
+    cell.as_any().is::<history_cell::SessionHeaderHistoryCell>()
+        || cell.as_any().is::<history_cell::SessionInfoCell>()
+}
+
+fn is_redesign_final_output_cell(cell: &dyn HistoryCell) -> bool {
+    cell.as_any().is::<history_cell::AgentMarkdownCell>()
+        || cell.as_any().is::<history_cell::AgentMessageCell>()
 }
 
 impl Drop for ChatWidget {

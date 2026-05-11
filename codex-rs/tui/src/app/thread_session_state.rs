@@ -46,6 +46,32 @@ impl App {
         }
     }
 
+    pub(super) async fn sync_active_thread_model_settings_to_cached_session(&mut self) {
+        let Some(active_thread_id) = self.active_thread_id else {
+            return;
+        };
+
+        let model = self.chat_widget.current_model().to_string();
+        let reasoning_effort = self.chat_widget.current_reasoning_effort();
+        let update_session = |session: &mut ThreadSessionState| {
+            session.model = model.clone();
+            session.reasoning_effort = reasoning_effort;
+        };
+
+        if self.primary_thread_id == Some(active_thread_id)
+            && let Some(session) = self.primary_session_configured.as_mut()
+        {
+            update_session(session);
+        }
+
+        if let Some(channel) = self.thread_event_channels.get(&active_thread_id) {
+            let mut store = channel.store.lock().await;
+            if let Some(session) = store.session.as_mut() {
+                update_session(session);
+            }
+        }
+    }
+
     pub(super) async fn session_state_for_thread_read(
         &self,
         thread_id: ThreadId,
@@ -129,6 +155,7 @@ mod tests {
     use codex_app_server_protocol::PermissionProfileNetworkPermissions;
     use codex_config::types::ApprovalsReviewer;
     use codex_protocol::models::PermissionProfile;
+    use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
 
@@ -304,6 +331,77 @@ mod tests {
             .session
             .clone();
         assert_eq!(store_session, Some(expected_session));
+    }
+
+    #[tokio::test]
+    async fn model_settings_sync_updates_only_active_chat_session() {
+        let mut app = make_test_app().await;
+        let main_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000406").expect("valid thread");
+        let side_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000407").expect("valid thread");
+        let main_session = test_thread_session(main_thread_id, test_path_buf("/tmp/main"));
+        let side_session = ThreadSessionState {
+            model: "gpt-side-old".to_string(),
+            reasoning_effort: Some(ReasoningEffortConfig::Low),
+            ..test_thread_session(side_thread_id, test_path_buf("/tmp/side"))
+        };
+
+        app.primary_thread_id = Some(main_thread_id);
+        app.active_thread_id = Some(side_thread_id);
+        app.primary_session_configured = Some(main_session.clone());
+        app.thread_event_channels.insert(
+            main_thread_id,
+            ThreadEventChannel::new_with_session(
+                /*capacity*/ 4,
+                main_session.clone(),
+                Vec::new(),
+            ),
+        );
+        app.thread_event_channels.insert(
+            side_thread_id,
+            ThreadEventChannel::new_with_session(
+                /*capacity*/ 4,
+                side_session.clone(),
+                Vec::new(),
+            ),
+        );
+        app.chat_widget.handle_thread_session(side_session.clone());
+        app.chat_widget.set_model("gpt-side-new");
+        app.chat_widget
+            .set_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+        app.sync_active_thread_model_settings_to_cached_session()
+            .await;
+
+        assert_eq!(app.primary_session_configured, Some(main_session.clone()));
+
+        let main_store_session = app
+            .thread_event_channels
+            .get(&main_thread_id)
+            .expect("main thread channel")
+            .store
+            .lock()
+            .await
+            .session
+            .clone();
+        assert_eq!(main_store_session, Some(main_session));
+
+        let expected_side_session = ThreadSessionState {
+            model: "gpt-side-new".to_string(),
+            reasoning_effort: Some(ReasoningEffortConfig::High),
+            ..side_session
+        };
+        let side_store_session = app
+            .thread_event_channels
+            .get(&side_thread_id)
+            .expect("side thread channel")
+            .store
+            .lock()
+            .await
+            .session
+            .clone();
+        assert_eq!(side_store_session, Some(expected_side_session));
     }
 
     #[tokio::test]

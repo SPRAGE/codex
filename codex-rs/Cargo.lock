@@ -3775,6 +3775,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-tui-redesign"
+version = "0.0.0"
+dependencies = [
+ "crossterm",
+ "insta",
+ "pretty_assertions",
+ "ratatui",
+ "textwrap 0.16.2",
+]
+
+[[package]]
 name = "codex-uds"
 version = "0.0.0"
 dependencies = [

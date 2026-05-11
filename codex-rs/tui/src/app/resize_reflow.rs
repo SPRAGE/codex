@@ -106,7 +106,7 @@ impl App {
     }
 
     pub(super) fn terminal_resize_reflow_enabled(&self) -> bool {
-        self.config.features.enabled(Feature::TerminalResizeReflow)
+        !self.redesign_chrome_enabled && self.config.features.enabled(Feature::TerminalResizeReflow)
     }
 
     /// Start retaining initial resume replay rows before they are written to scrollback.

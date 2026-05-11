@@ -58,6 +58,7 @@ use crate::multi_agents::format_agent_picker_item_name;
 use crate::multi_agents::next_agent_shortcut_matches;
 use crate::multi_agents::previous_agent_shortcut_matches;
 use crate::pager_overlay::Overlay;
+use crate::redesign_chrome;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
@@ -150,17 +151,22 @@ use codex_terminal_detection::user_agent;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
+use crossterm::cursor::SetCursorStyle;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use ratatui::backend::Backend;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::layout::Size;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::io::Write;
 use std::path::Path;
@@ -429,6 +435,11 @@ struct InitialHistoryReplayBuffer {
     render_from_transcript_tail: bool,
 }
 
+pub(crate) struct AppFrameRender {
+    pub(crate) cursor_pos: Option<(u16, u16)>,
+    pub(crate) cursor_style: SetCursorStyle,
+}
+
 pub(crate) struct App {
     model_catalog: Arc<ModelCatalog>,
     pub(crate) session_telemetry: SessionTelemetry,
@@ -510,6 +521,14 @@ pub(crate) struct App {
     // Serialize hook enablement writes per hook so stale completions cannot
     // persist an older toggle after a newer one.
     pending_hook_enabled_writes: HashMap<String, Option<bool>>,
+    pub(crate) redesign_chrome_enabled: bool,
+    pub(crate) redesign_sidebar_state: redesign_chrome::RedesignSidebarState,
+    pub(crate) redesign_transcript_scroll: usize,
+    pub(crate) redesign_final_only_transcript: bool,
+    redesign_chat_names: HashMap<ThreadId, String>,
+    redesign_chat_activity: HashMap<ThreadId, redesign_chrome::RedesignChatActivity>,
+    redesign_chat_unread: HashSet<ThreadId>,
+    pending_redesign_chat_notifications: VecDeque<String>,
 }
 
 fn active_turn_not_steerable_turn_error(error: &TypedRequestError) -> Option<AppServerTurnError> {
@@ -618,6 +637,7 @@ impl App {
         remote_app_server_auth_token: Option<String>,
         state_db: Option<StateDbHandle>,
         environment_manager: Arc<EnvironmentManager>,
+        redesign_chrome_enabled: bool,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
@@ -913,6 +933,14 @@ See the Codex keymap documentation for supported actions and examples."
             pending_app_server_requests: PendingAppServerRequests::default(),
             pending_plugin_enabled_writes: HashMap::new(),
             pending_hook_enabled_writes: HashMap::new(),
+            redesign_chrome_enabled,
+            redesign_sidebar_state: redesign_chrome::RedesignSidebarState::default(),
+            redesign_transcript_scroll: 0,
+            redesign_final_only_transcript: false,
+            redesign_chat_names: HashMap::new(),
+            redesign_chat_activity: HashMap::new(),
+            redesign_chat_unread: HashSet::new(),
+            pending_redesign_chat_notifications: VecDeque::new(),
         };
         if let Some(started) = initial_started_thread {
             let thread_id = started.session.thread_id;
@@ -1099,6 +1127,12 @@ See the Codex keymap documentation for supported actions and examples."
             }
         }
 
+        if self.redesign_chrome_enabled && input::redesign_global_quit_key_matches(&event) {
+            return Ok(self
+                .handle_exit_mode(app_server, ExitMode::ShutdownFirst)
+                .await);
+        }
+
         if self.overlay.is_some() {
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else {
@@ -1119,6 +1153,7 @@ See the Codex keymap documentation for supported actions and examples."
                         self.backtrack_render_pending = false;
                         self.render_transcript_once(tui);
                     }
+                    self.maybe_post_pending_redesign_chat_notifications(tui);
                     self.chat_widget.maybe_post_pending_notification(tui);
                     if self
                         .chat_widget
@@ -1128,23 +1163,23 @@ See the Codex keymap documentation for supported actions and examples."
                     }
                     // Allow widgets to process any pending timers before rendering.
                     self.chat_widget.pre_draw_tick();
-                    let desired_height =
-                        self.chat_widget.desired_height(tui.terminal.size()?.width);
+                    let terminal_size = tui.terminal.size()?;
+                    let desired_height = self.desired_render_height(terminal_size);
                     if terminal_resize_reflow_enabled {
                         tui.draw_with_resize_reflow(desired_height, |frame| {
                             let area = frame.area();
-                            self.chat_widget.render(area, frame.buffer);
-                            if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
-                                frame.set_cursor_style(self.chat_widget.cursor_style(area));
+                            let render = self.render_frame(area, frame.buffer);
+                            if let Some((x, y)) = render.cursor_pos {
+                                frame.set_cursor_style(render.cursor_style);
                                 frame.set_cursor_position((x, y));
                             }
                         })?;
                     } else {
                         tui.draw(desired_height, |frame| {
                             let area = frame.area();
-                            self.chat_widget.render(area, frame.buffer);
-                            if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
-                                frame.set_cursor_style(self.chat_widget.cursor_style(area));
+                            let render = self.render_frame(area, frame.buffer);
+                            if let Some((x, y)) = render.cursor_pos {
+                                frame.set_cursor_style(render.cursor_style);
                                 frame.set_cursor_position((x, y));
                             }
                         })?;
@@ -1158,6 +1193,31 @@ See the Codex keymap documentation for supported actions and examples."
             }
         }
         Ok(AppRunControl::Continue)
+    }
+
+    fn desired_render_height(&self, terminal_size: Size) -> u16 {
+        if self.redesign_chrome_enabled {
+            return terminal_size.height;
+        }
+
+        self.chat_widget.desired_height(terminal_size.width)
+    }
+
+    fn render_frame(&self, area: Rect, buf: &mut Buffer) -> AppFrameRender {
+        if self.redesign_chrome_enabled {
+            return redesign_chrome::render_app(area, buf, self);
+        }
+
+        let cursor_pos = self.chat_widget.cursor_pos(area);
+        let cursor_style = self.chat_widget.cursor_style(area);
+        if !area.is_empty() {
+            self.chat_widget.render(area, buf);
+        }
+
+        AppFrameRender {
+            cursor_pos,
+            cursor_style,
+        }
     }
 }
 

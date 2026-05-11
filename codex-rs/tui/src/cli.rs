@@ -71,6 +71,24 @@ pub struct Cli {
 
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
+
+    /// Use the legacy inline chat UI instead of the redesigned full-screen TUI.
+    #[arg(long = "legacy-ui", default_value_t = false)]
+    pub legacy_ui: bool,
+
+    /// Deprecated: the redesigned TUI is now the default.
+    #[arg(
+        long = "experimental-redesigned-ui",
+        default_value_t = false,
+        hide = true
+    )]
+    pub experimental_redesigned_ui: bool,
+}
+
+impl Cli {
+    pub(crate) fn redesigned_ui_enabled(&self) -> bool {
+        self.experimental_redesigned_ui || !self.legacy_ui
+    }
 }
 
 impl std::ops::Deref for Cli {
@@ -134,4 +152,31 @@ fn mark_tui_args(cmd: clap::Command) -> clap::Command {
     cmd.mut_arg("dangerously_bypass_approvals_and_sandbox", |arg| {
         arg.conflicts_with("approval_policy")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn redesigned_ui_is_enabled_by_default() {
+        let cli = Cli::try_parse_from(["codex"]).expect("valid cli");
+
+        assert!(cli.redesigned_ui_enabled());
+    }
+
+    #[test]
+    fn legacy_ui_flag_disables_redesign() {
+        let cli = Cli::try_parse_from(["codex", "--legacy-ui"]).expect("valid cli");
+
+        assert!(!cli.redesigned_ui_enabled());
+    }
+
+    #[test]
+    fn old_experimental_flag_still_enables_redesign() {
+        let cli =
+            Cli::try_parse_from(["codex", "--experimental-redesigned-ui"]).expect("valid cli");
+
+        assert!(cli.redesigned_ui_enabled());
+    }
 }

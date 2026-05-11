@@ -55,6 +55,7 @@ use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadNameUpdatedNotification;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
@@ -3908,6 +3909,14 @@ async fn make_test_app() -> App {
         pending_app_server_requests: PendingAppServerRequests::default(),
         pending_plugin_enabled_writes: HashMap::new(),
         pending_hook_enabled_writes: HashMap::new(),
+        redesign_chrome_enabled: false,
+        redesign_sidebar_state: redesign_chrome::RedesignSidebarState::default(),
+        redesign_transcript_scroll: 0,
+        redesign_final_only_transcript: false,
+        redesign_chat_names: HashMap::new(),
+        redesign_chat_activity: HashMap::new(),
+        redesign_chat_unread: HashSet::new(),
+        pending_redesign_chat_notifications: VecDeque::new(),
     }
 }
 
@@ -3971,6 +3980,14 @@ async fn make_test_app_with_channels() -> (
             pending_app_server_requests: PendingAppServerRequests::default(),
             pending_plugin_enabled_writes: HashMap::new(),
             pending_hook_enabled_writes: HashMap::new(),
+            redesign_chrome_enabled: false,
+            redesign_sidebar_state: redesign_chrome::RedesignSidebarState::default(),
+            redesign_transcript_scroll: 0,
+            redesign_final_only_transcript: false,
+            redesign_chat_names: HashMap::new(),
+            redesign_chat_activity: HashMap::new(),
+            redesign_chat_unread: HashSet::new(),
+            pending_redesign_chat_notifications: VecDeque::new(),
         },
         rx,
         op_rx,
@@ -4480,6 +4497,140 @@ fn active_turn_steer_race_extracts_actual_turn_id_from_mismatch() {
             actual_turn_id: "turn-actual".to_string(),
         })
     );
+}
+
+#[tokio::test]
+async fn inactive_redesign_chat_completion_marks_unread_and_queues_notification() {
+    let mut app = make_test_app().await;
+    let main_thread_id = ThreadId::new();
+    let agent_thread_id = ThreadId::new();
+    app.primary_thread_id = Some(main_thread_id);
+    app.active_thread_id = Some(main_thread_id);
+    app.config.tui_notifications.notifications = codex_config::types::Notifications::Enabled(true);
+    app.upsert_agent_picker_thread(
+        main_thread_id,
+        /*agent_nickname*/ None,
+        /*agent_role*/ None,
+        /*is_closed*/ false,
+    );
+    app.upsert_agent_picker_thread(
+        agent_thread_id,
+        Some("Scout".to_string()),
+        Some("explorer".to_string()),
+        /*is_closed*/ false,
+    );
+
+    app.note_redesign_chat_notification(
+        agent_thread_id,
+        &turn_completed_notification(agent_thread_id, "turn-1", TurnStatus::Completed),
+    );
+
+    let entry = app
+        .redesign_chat_entries()
+        .into_iter()
+        .find(|entry| entry.thread_id == agent_thread_id)
+        .expect("agent chat entry");
+    assert_eq!(
+        entry,
+        redesign_chrome::RedesignChatListEntry {
+            thread_id: agent_thread_id,
+            label: "Scout [explorer]".to_string(),
+            activity: redesign_chrome::RedesignChatActivity::Done,
+            is_active: false,
+            unread: true,
+        }
+    );
+    assert_eq!(
+        app.pending_redesign_chat_notifications.pop_front(),
+        Some("Scout [explorer] completed.".to_string())
+    );
+}
+
+#[tokio::test]
+async fn redesign_chat_entries_follow_thread_name_updates() {
+    let mut app = make_test_app().await;
+    let thread_id = ThreadId::new();
+    app.primary_thread_id = Some(thread_id);
+    app.active_thread_id = Some(thread_id);
+    app.upsert_agent_picker_thread(
+        thread_id, /*agent_nickname*/ None, /*agent_role*/ None, /*is_closed*/ false,
+    );
+
+    let entry = app
+        .redesign_chat_entries()
+        .into_iter()
+        .find(|entry| entry.thread_id == thread_id)
+        .expect("chat entry");
+    assert_eq!(entry.label, "New Chat");
+
+    app.enqueue_thread_notification(
+        thread_id,
+        ServerNotification::ThreadNameUpdated(ThreadNameUpdatedNotification {
+            thread_id: thread_id.to_string(),
+            thread_name: Some("Design the TUI".to_string()),
+        }),
+    )
+    .await
+    .expect("thread name update should be enqueued");
+    let entry = app
+        .redesign_chat_entries()
+        .into_iter()
+        .find(|entry| entry.thread_id == thread_id)
+        .expect("chat entry");
+    assert_eq!(entry.label, "Design the TUI");
+
+    app.enqueue_thread_notification(
+        thread_id,
+        ServerNotification::ThreadNameUpdated(ThreadNameUpdatedNotification {
+            thread_id: thread_id.to_string(),
+            thread_name: None,
+        }),
+    )
+    .await
+    .expect("thread name clear should be enqueued");
+    let entry = app
+        .redesign_chat_entries()
+        .into_iter()
+        .find(|entry| entry.thread_id == thread_id)
+        .expect("chat entry");
+    assert_eq!(entry.label, "New Chat");
+}
+
+#[tokio::test]
+async fn existing_redesign_new_chat_thread_id_finds_only_open_unnamed_chat() {
+    let mut app = make_test_app().await;
+    let named_thread_id = ThreadId::new();
+    let new_thread_id = ThreadId::new();
+    let closed_thread_id = ThreadId::new();
+    app.primary_thread_id = Some(named_thread_id);
+    app.active_thread_id = Some(named_thread_id);
+    app.upsert_agent_picker_thread(
+        named_thread_id,
+        /*agent_nickname*/ None,
+        /*agent_role*/ None,
+        /*is_closed*/ false,
+    );
+    app.remember_redesign_chat_name(named_thread_id, Some("Existing work"));
+    app.upsert_agent_picker_thread(
+        new_thread_id,
+        /*agent_nickname*/ None,
+        /*agent_role*/ None,
+        /*is_closed*/ false,
+    );
+    app.upsert_agent_picker_thread(
+        closed_thread_id,
+        /*agent_nickname*/ None,
+        /*agent_role*/ None,
+        /*is_closed*/ true,
+    );
+
+    assert_eq!(
+        app.existing_redesign_new_chat_thread_id(),
+        Some(new_thread_id)
+    );
+
+    app.remember_redesign_chat_name(new_thread_id, Some("Named work"));
+    assert_eq!(app.existing_redesign_new_chat_thread_id(), None);
 }
 
 #[tokio::test]

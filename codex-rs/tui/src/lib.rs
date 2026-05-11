@@ -152,6 +152,7 @@ mod oss_selection;
 mod pager_overlay;
 mod permission_compat;
 pub(crate) mod public_widgets;
+mod redesign_chrome;
 mod render;
 mod resize_reflow_cap;
 mod resume_picker;
@@ -1484,6 +1485,7 @@ async fn run_ratatui_app(
         && trust_decision_was_made
         && WindowsSandboxLevel::from_config(&config) == WindowsSandboxLevel::Disabled;
 
+    let redesigned_ui_enabled = cli.redesigned_ui_enabled();
     let Cli {
         prompt,
         shared,
@@ -1492,7 +1494,11 @@ async fn run_ratatui_app(
     } = cli;
     let images = shared.into_inner().images;
 
-    let use_alt_screen = determine_alt_screen_mode(no_alt_screen, config.tui_alternate_screen);
+    let use_alt_screen = if redesigned_ui_enabled {
+        !no_alt_screen
+    } else {
+        determine_alt_screen_mode(no_alt_screen, config.tui_alternate_screen)
+    };
     tui.set_alt_screen_enabled(use_alt_screen);
     let app_server = match app_server {
         Some(app_server) => app_server,
@@ -1520,6 +1526,10 @@ async fn run_ratatui_app(
         },
     };
 
+    if redesigned_ui_enabled {
+        tui.enter_alt_screen()?;
+    }
+
     let app_result = App::run(
         &mut tui,
         app_server,
@@ -1538,8 +1548,13 @@ async fn run_ratatui_app(
         remote_auth_token,
         state_db,
         environment_manager,
+        redesigned_ui_enabled,
     )
     .await;
+
+    if redesigned_ui_enabled {
+        let _ = tui.leave_alt_screen();
+    }
 
     terminal_restore_guard.restore_silently();
     // Mark the end of the recorded session.

@@ -200,7 +200,10 @@ impl App {
                     tui.frame_requester().schedule_frame();
                 }
                 self.transcript_cells.push(cell.clone());
-                if self.initial_history_replay_buffer.as_ref().is_some() {
+                if self.redesign_chrome_enabled {
+                    tui.clear_pending_history_lines();
+                    tui.frame_requester().schedule_frame();
+                } else if self.initial_history_replay_buffer.as_ref().is_some() {
                     self.insert_history_cell_lines_with_initial_replay_buffer(
                         tui,
                         cell.as_ref(),
@@ -269,11 +272,15 @@ impl App {
                         t.insert_cell(consolidated.clone());
                         tui.frame_requester().schedule_frame();
                     }
-                    self.insert_history_cell_lines(
-                        tui,
-                        consolidated.as_ref(),
-                        tui.terminal.last_known_screen_size.width,
-                    );
+                    if self.redesign_chrome_enabled {
+                        tui.frame_requester().schedule_frame();
+                    } else {
+                        self.insert_history_cell_lines(
+                            tui,
+                            consolidated.as_ref(),
+                            tui.terminal.last_known_screen_size.width,
+                        );
+                    }
 
                     self.maybe_finish_stream_reflow(tui)?;
                 }
@@ -727,12 +734,19 @@ impl App {
             }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort);
+                self.sync_active_thread_model_settings_to_cached_session()
+                    .await;
             }
             AppEvent::UpdateModel(model) => {
+                self.config.model = Some(model.clone());
                 self.chat_widget.set_model(&model);
+                self.sync_active_thread_model_settings_to_cached_session()
+                    .await;
             }
             AppEvent::UpdateCollaborationMode(mask) => {
                 self.chat_widget.set_collaboration_mask(mask);
+                self.sync_active_thread_model_settings_to_cached_session()
+                    .await;
             }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
@@ -1504,6 +1518,8 @@ impl App {
             AppEvent::UpdatePlanModeReasoningEffort(effort) => {
                 self.config.plan_mode_reasoning_effort = effort;
                 self.chat_widget.set_plan_mode_reasoning_effort(effort);
+                self.sync_active_thread_model_settings_to_cached_session()
+                    .await;
             }
             AppEvent::PersistFullAccessWarningAcknowledged => {
                 if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
