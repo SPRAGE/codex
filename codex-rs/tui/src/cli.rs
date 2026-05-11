@@ -72,11 +72,15 @@ pub struct Cli {
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 
-    /// Use the legacy inline chat UI instead of the redesigned full-screen TUI.
-    #[arg(long = "legacy-ui", default_value_t = false)]
+    /// Use the redesigned full-screen TUI.
+    #[arg(long = "redesign-tui", alias = "redesign_TUI", default_value_t = false)]
+    pub redesign_tui: bool,
+
+    /// Deprecated: the legacy inline chat UI is the default.
+    #[arg(long = "legacy-ui", default_value_t = false, hide = true)]
     pub legacy_ui: bool,
 
-    /// Deprecated: the redesigned TUI is now the default.
+    /// Deprecated: use --redesign-tui.
     #[arg(
         long = "experimental-redesigned-ui",
         default_value_t = false,
@@ -87,7 +91,7 @@ pub struct Cli {
 
 impl Cli {
     pub(crate) fn redesigned_ui_enabled(&self) -> bool {
-        self.experimental_redesigned_ui || !self.legacy_ui
+        self.redesign_tui || self.experimental_redesigned_ui
     }
 }
 
@@ -159,14 +163,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn redesigned_ui_is_enabled_by_default() {
+    fn redesigned_ui_is_disabled_by_default() {
         let cli = Cli::try_parse_from(["codex"]).expect("valid cli");
+
+        assert!(!cli.redesigned_ui_enabled());
+    }
+
+    #[test]
+    fn redesign_tui_flag_enables_redesign() {
+        let cli = Cli::try_parse_from(["codex", "--redesign-tui"]).expect("valid cli");
 
         assert!(cli.redesigned_ui_enabled());
     }
 
     #[test]
-    fn legacy_ui_flag_disables_redesign() {
+    fn redesign_tui_underscore_alias_enables_redesign() {
+        let cli = Cli::try_parse_from(["codex", "--redesign_TUI"]).expect("valid cli");
+
+        assert!(cli.redesigned_ui_enabled());
+    }
+
+    #[test]
+    fn legacy_ui_flag_keeps_redesign_disabled() {
         let cli = Cli::try_parse_from(["codex", "--legacy-ui"]).expect("valid cli");
 
         assert!(!cli.redesigned_ui_enabled());

@@ -457,8 +457,8 @@ pub(crate) fn render_chrome(
     let layout = layout_for_dimensions_with_side(area, side_width, COMPOSER_ROWS);
     render_top_bar(area, buf, context);
     render_top_separator(area, buf);
-    draw_horizontal_rule(layout.chat_separator, buf, layout.chat_separator.y);
     render_chat_bar(layout.chat_header, buf, context);
+    draw_horizontal_rule(layout.chat_separator, buf, layout.chat_separator.y);
     render_side_nav(layout.side, buf, context, sidebar);
     render_footer(layout.footer, buf, context);
 }
@@ -527,16 +527,16 @@ fn layout_for_dimensions_with_side(
         body_height,
     );
     let right = Rect::new(main.right(), body_y, right_width, body_height);
-    let chat_separator_height = CHAT_SEPARATOR_ROWS.min(main.height);
-    let chat_separator = Rect::new(main.x, main.y, main.width, chat_separator_height);
-    let chat_header_y = main.y.saturating_add(chat_separator_height);
-    let chat_header_height =
-        CHAT_HEADER_ROWS.min(main.height.saturating_sub(chat_separator_height));
-    let chat_header = Rect::new(main.x, chat_header_y, main.width, chat_header_height);
-    let chat_body_y = chat_header_y.saturating_add(chat_header_height);
+    let chat_header_height = CHAT_HEADER_ROWS.min(main.height);
+    let chat_header = Rect::new(main.x, main.y, main.width, chat_header_height);
+    let chat_separator_y = main.y.saturating_add(chat_header_height);
+    let chat_separator_height =
+        CHAT_SEPARATOR_ROWS.min(main.height.saturating_sub(chat_header_height));
+    let chat_separator = Rect::new(main.x, chat_separator_y, main.width, chat_separator_height);
+    let chat_body_y = chat_separator_y.saturating_add(chat_separator_height);
     let chat_body_height = main
         .height
-        .saturating_sub(chat_separator_height + chat_header_height);
+        .saturating_sub(chat_header_height + chat_separator_height);
     let composer_height = composer_height.min(chat_body_height);
     let transcript_height = chat_body_height.saturating_sub(composer_height);
     let transcript = Rect::new(main.x, chat_body_y, main.width, transcript_height);
