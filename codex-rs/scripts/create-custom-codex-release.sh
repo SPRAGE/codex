@@ -60,7 +60,8 @@ Examples:
   $0 --version v0.2.0 --build-mode cargo
 
 Downstream usage after publishing:
-  inputs.custom-codex-release.url = "github:SPRAGE/custom-codex-release/v0.2.0";
+  inputs.custom-codex-release.url =
+    "git+ssh://git@github.com/SPRAGE/custom-codex-release.git?ref=release/v0.2.0";
   environment.systemPackages = [
     inputs.custom-codex-release.packages.\${pkgs.system}.codex
   ];
@@ -485,6 +486,9 @@ emit_release_flake() {
     local source_rev
     source_rev=$(git -C "$SOURCE_ROOT" rev-parse HEAD)
 
+    cp -f "$TAR_PATH" "$RELEASE_DIR/codex-${system}.tar.gz"
+    cp -f "${TAR_PATH}.sha256" "$RELEASE_DIR/codex-${system}.tar.gz.sha256"
+
     cat >"$RELEASE_DIR/flake.nix" <<EOF
 {
   description = "Custom Codex release with prebuilt redesigned TUI binary";
@@ -501,16 +505,15 @@ emit_release_flake() {
         lib = pkgs.lib;
 
         version = "${VERSION}";
-        releaseOwner = "${RELEASE_OWNER}";
-        releaseRepo = "${RELEASE_REPO}";
         tarballSha256BySystem = {
           "${system}" = "${sha}";
         };
-        tarballSha256 =
-          tarballSha256BySystem.\${system} or
+        tarballBySystem = {
+          "${system}" = ./codex-${system}.tar.gz;
+        };
+        tarball =
+          tarballBySystem.\${system} or
             (throw "No custom Codex prebuilt binary for \${system} in \${version}");
-        tarballUrl =
-          "https://github.com/\${releaseOwner}/\${releaseRepo}/releases/download/\${version}/codex-\${system}.tar.gz";
 
         runtimeDeps = with pkgs; [
           stdenv.cc.cc.lib
@@ -527,10 +530,7 @@ emit_release_flake() {
           pname = "custom-codex";
           inherit version;
 
-          src = pkgs.fetchurl {
-            url = tarballUrl;
-            sha256 = tarballSha256;
-          };
+          src = tarball;
 
           nativeBuildInputs = [
             pkgs.autoPatchelfHook
@@ -596,6 +596,18 @@ emit_release_flake() {
           codex-legacy = customCodex;
         };
 
+        checks."tarball-sha256" = pkgs.runCommand "custom-codex-tarball-sha256" { } ''
+          actual=$(\${pkgs.coreutils}/bin/sha256sum \${tarball} | \${pkgs.coreutils}/bin/cut -d' ' -f1)
+          expected="${sha}"
+          if [ "\$actual" != "\$expected" ]; then
+            echo "sha256 mismatch for \${tarball}" >&2
+            echo "expected: \$expected" >&2
+            echo "actual:   \$actual" >&2
+            exit 1
+          fi
+          touch \$out
+        '';
+
         apps = {
           default = {
             type = "app";
@@ -617,7 +629,56 @@ emit_release_flake() {
         custom-codex = self.packages.\${final.system}.custom-codex;
         codex-legacy = self.packages.\${final.system}.codex-legacy;
       };
+
+      nixosModules = {
+        default = import ./nix/modules/custom-codex.nix { inherit self; };
+        custom-codex = import ./nix/modules/custom-codex.nix { inherit self; };
+      };
     };
+}
+EOF
+
+    mkdir -p "$RELEASE_DIR/nix/modules"
+    cat >"$RELEASE_DIR/nix/modules/custom-codex.nix" <<'EOF'
+{ self }:
+
+{ config, lib, pkgs, ... }:
+
+let
+  cfg = config.programs.custom-codex;
+  system = pkgs.stdenv.hostPlatform.system;
+in
+{
+  options.programs.custom-codex = {
+    enable = lib.mkEnableOption "custom Codex with the redesigned TUI enabled by default";
+
+    package = lib.mkOption {
+      type = lib.types.package;
+      default = self.packages.${system}.codex;
+      defaultText = lib.literalExpression "custom-codex-release.packages.${pkgs.system}.codex";
+      description = ''
+        Package that provides the custom Codex commands. The default package
+        installs `codex` with the redesigned TUI enabled and `codex-legacy`
+        without the redesign flag.
+      '';
+    };
+
+    setDefaultEditor = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Whether to set EDITOR to the redesigned Codex command for all users.
+      '';
+    };
+  };
+
+  config = lib.mkIf cfg.enable {
+    environment.systemPackages = [ cfg.package ];
+
+    environment.variables = lib.mkIf cfg.setDefaultEditor {
+      EDITOR = "codex";
+    };
+  };
 }
 EOF
 
@@ -630,15 +691,59 @@ Published systems:
 
 - ${system}: \`${sha}\`
 
-This flake distributes prebuilt Codex binaries for downstream Nix systems.
+This private flake distributes a prebuilt Codex binary for downstream Nix
+systems. The tarball is committed into this repository and consumed via
+\`git+ssh\`, matching the private release style used by the trading repo.
+
 The \`codex\` command starts with \`${REDESIGN_FLAG}\` by default. The
 \`codex-legacy\` command is preserved for the legacy TUI.
 
-## NixOS Usage
+## NixOS Module Usage
+
+Use \`git+ssh\`, not \`github:\`, so Nix fetches the private repository through
+SSH and can see the committed tarball.
 
 \`\`\`nix
 {
-  inputs.custom-codex-release.url = "github:${RELEASE_OWNER}/${RELEASE_REPO}/${VERSION}";
+  inputs.custom-codex-release.url =
+    "git+ssh://git@github.com/${RELEASE_OWNER}/${RELEASE_REPO}.git?ref=release/${VERSION}";
+
+  outputs = { nixpkgs, custom-codex-release, ... }: {
+    nixosConfigurations.host = nixpkgs.lib.nixosSystem {
+      system = "${system}";
+      modules = [
+        custom-codex-release.nixosModules.default
+        {
+          programs.custom-codex.enable = true;
+        }
+      ];
+    };
+  };
+}
+\`\`\`
+
+The module installs the package into \`environment.systemPackages\`. That
+package provides both commands:
+
+- \`codex\`: redesigned TUI by default.
+- \`codex-legacy\`: legacy TUI, without \`${REDESIGN_FLAG}\`.
+
+### Module Options
+
+\`\`\`nix
+programs.custom-codex = {
+  enable = true;
+  package = custom-codex-release.packages.\${pkgs.system}.codex;
+  setDefaultEditor = false;
+};
+\`\`\`
+
+## Package Usage Without Module
+
+\`\`\`nix
+{
+  inputs.custom-codex-release.url =
+    "git+ssh://git@github.com/${RELEASE_OWNER}/${RELEASE_REPO}.git?ref=release/${VERSION}";
 
   outputs = { nixpkgs, custom-codex-release, ... }: {
     nixosConfigurations.host = nixpkgs.lib.nixosSystem {
@@ -658,16 +763,28 @@ The \`codex\` command starts with \`${REDESIGN_FLAG}\` by default. The
 ## Direct Run
 
 \`\`\`sh
-nix run github:${RELEASE_OWNER}/${RELEASE_REPO}/${VERSION}
-nix run github:${RELEASE_OWNER}/${RELEASE_REPO}/${VERSION}#codex-legacy
+nix run "git+ssh://git@github.com/${RELEASE_OWNER}/${RELEASE_REPO}.git?ref=release/${VERSION}"
+nix run "git+ssh://git@github.com/${RELEASE_OWNER}/${RELEASE_REPO}.git?ref=release/${VERSION}#codex-legacy"
 \`\`\`
 
-## Package Outputs
+## Floating Latest Input
+
+For machines where you intentionally want the newest published binary:
+
+\`\`\`nix
+inputs.custom-codex-release.url =
+  "git+ssh://git@github.com/${RELEASE_OWNER}/${RELEASE_REPO}.git?ref=latest";
+\`\`\`
+
+## Flake Outputs
 
 - \`packages.<system>.codex\`: redesign UI by default, plus \`codex-legacy\`.
 - \`packages.<system>.custom-codex\`: alias of \`codex\`.
 - \`packages.<system>.codex-legacy\`: compatibility alias; the package still
   installs both \`codex\` and \`codex-legacy\`.
+- \`nixosModules.default\`: installs the custom Codex package through
+  \`programs.custom-codex.enable\`.
+- \`nixosModules.custom-codex\`: alias of the default module.
 
 Regenerate this repo from the Codex checkout with:
 
@@ -692,7 +809,13 @@ commit_release_repo() {
         return
     fi
 
-    git -C "$RELEASE_DIR" add flake.nix README.md .gitignore
+    git -C "$RELEASE_DIR" add \
+        flake.nix \
+        README.md \
+        .gitignore \
+        "codex-${SYSTEM}.tar.gz" \
+        "codex-${SYSTEM}.tar.gz.sha256" \
+        nix/modules/custom-codex.nix
 
     if [[ -z "$(git -C "$RELEASE_DIR" status --short)" ]]; then
         warn "Release repo has no file changes to commit"
@@ -701,9 +824,12 @@ commit_release_repo() {
     fi
 
     git -C "$RELEASE_DIR" tag -a "$VERSION" -m "Release ${VERSION}"
+    git -C "$RELEASE_DIR" branch -f "release/${VERSION}" HEAD
+    git -C "$RELEASE_DIR" branch -f latest HEAD
 
     if [[ "$DO_GH" == "1" ]]; then
         git -C "$RELEASE_DIR" push origin main
+        git -C "$RELEASE_DIR" push origin "release/${VERSION}" latest
         git -C "$RELEASE_DIR" push origin "$VERSION"
     else
         log "Skipping release repo push (--no-gh or --dry-run)"
@@ -726,6 +852,7 @@ Prebuilt Codex binary for downstream Nix systems.
 - System: ${SYSTEM}
 - SHA256: ${TAR_SHA256}
 - Source commit: $(git -C "$SOURCE_ROOT" rev-parse HEAD)
+- Downstream input: git+ssh://git@github.com/${RELEASE_OWNER}/${RELEASE_REPO}.git?ref=release/${VERSION}
 - \`codex\` runs with \`${REDESIGN_FLAG}\`
 - \`codex-legacy\` is preserved without \`${REDESIGN_FLAG}\`
 EOF
@@ -773,7 +900,7 @@ main() {
     echo
     echo "Release repo: $RELEASE_DIR"
     echo "Tarball: $TAR_PATH"
-    echo "Downstream input: github:${RELEASE_OWNER}/${RELEASE_REPO}/${VERSION}"
+    echo "Downstream input: git+ssh://git@github.com/${RELEASE_OWNER}/${RELEASE_REPO}.git?ref=release/${VERSION}"
 }
 
 main "$@"
