@@ -1,6 +1,6 @@
 ---
 source: tui-redesign/src/render/tests.rs
-assertion_line: 71
+assertion_line: 89
 expression: "render_to_string(100, 24, &state).expect(\"render\")"
 ---
 CODEX_CLI v0.0.0 | NETWORK | MOD: gpt-5.4 xhigh | PERM: workspace-write | CTX: 72% left             
@@ -26,4 +26,4 @@ PATH: ~/root/dev       │──────────────────
                        │▶ Running: linting project | Esc INT  Tab QUE                               
                        │ MSG> Describe the next change...                                           
                        │────────────────────────────────────────────────────────────────────────────
-(C) OPENAI_CODEX  F1 HELP  F2 CMD  F3 CLR  ESC EXIT  ? shortcuts  C-R history  C-T transcript  S-Tab
+(C) OPENAI_CODEX  Alt-H HELP  Alt-/ CMD  ESC EXIT  ? shortcuts  C-R history  C-T transcript  S-Tab m

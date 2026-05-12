@@ -1,12 +1,11 @@
 ---
 source: tui/src/redesign_chrome.rs
-assertion_line: 1969
 expression: "render_fixture_with_sidebar(72, 18, sidebar)"
 ---
 "CODEX_CLI dev                                                           "
 "------------------------------------------------------------------------"
-" CHATS               |gpt-5.4 xhigh | ctx 72% left | tok in 1.2K / ou..."
-" C-B close           |--------------------------------------------------"
+" CHATS               |⠋ working | gpt-5.4 xhigh | ctx 72% left | tok ..."
+" Alt-B close         |--------------------------------------------------"
 "                     |               │ Let's redesign the TUI to be  │ |"
 "  active Main [def...|               │ more intuitive for CLI users. │ |"
 "› unread Scout [ex...|               ╰───────────────────────────────╯ |"
@@ -15,9 +14,9 @@ expression: "render_fixture_with_sidebar(72, 18, sidebar)"
 " ACTIONS             | ╭───────────────────────────────────╮           |"
 "  N      NEW CHAT    | │ Agreed. I'll focus on information │           |"
 "  F      FINAL ONLY O| │ density and clear keyboard        │           |"
-"  F2     COMMANDS    | │ shortcuts.                        │           |"
-"  F4     MODELS      | ╰───────────────────────────────────╯           #"
+"  Alt-/  COMMANDS    | │ shortcuts.                        │           |"
+"  Alt-M  MODELS      | ╰───────────────────────────────────╯           #"
 "  C-R    HISTORY     |--------------------------------------------------"
-"  C-T    TRANSCRIPT  |⠋ MSG> Describe the next change...                "
+"  C-T    TRANSCRIPT  |MSG> Describe the next change...                  "
 "  C-G    EDITOR      |--------------------------------------------------"
-"~/codes/codex · redesign-tui · 3 f...  F1 help  C-T transcript  C-C exit"
+"~/codes/codex · red...  Alt-H help  Alt-/ cmds  C-T transcript  C-C exit"

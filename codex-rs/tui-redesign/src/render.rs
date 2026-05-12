@@ -1,10 +1,12 @@
 use std::io;
 
+use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
+use ratatui::layout::Position;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::Line;
@@ -78,10 +80,16 @@ impl<'a> RedesignApp<'a> {
 pub fn render_to_string(width: u16, height: u16, state: &RedesignState) -> io::Result<String> {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend)?;
-    terminal.draw(|frame| {
-        frame.render_widget(RedesignApp::new(state), frame.area());
-    })?;
+    terminal.draw(|frame| render_frame(frame, state))?;
     Ok(buffer_to_plain_text(terminal.backend().buffer()))
+}
+
+pub(crate) fn render_frame(frame: &mut Frame<'_>, state: &RedesignState) {
+    let area = frame.area();
+    frame.render_widget(RedesignApp::new(state), area);
+    if let Some(position) = composer_cursor_position(area, state) {
+        frame.set_cursor_position(position);
+    }
 }
 
 impl Widget for RedesignApp<'_> {
@@ -414,8 +422,6 @@ fn push_inline_approval(
     let command_fill = box_width.saturating_sub(8 + command.chars().count());
     let reason = trim_to_width(&approval.reason, inner_width);
     let reason_fill = box_width.saturating_sub(8 + reason.chars().count());
-    let actions_width = "[ APPROVE ]  [ APV_SESS ]  [ DENY ]".chars().count();
-    let actions_fill = box_width.saturating_sub(3 + actions_width);
 
     lines.push(Line::from(vec![
         Span::styled("┌─", theme::border()),
@@ -444,30 +450,71 @@ fn push_inline_approval(
         " ".repeat(reason_fill).into(),
         Span::styled("│", theme::border()),
     ]));
-    lines.push(Line::from(vec![
-        Span::styled("│ ", theme::border()),
-        approval_action_span(
-            "[ APPROVE ]",
-            ApprovalChoice::Approve,
+    if box_width >= 48 {
+        push_approval_actions_line(
+            lines,
+            box_width,
+            vec![
+                ("[ APPROVE ]", ApprovalChoice::Approve),
+                ("[ APPROVE SESSION ]", ApprovalChoice::ApproveSession),
+                ("[ DENY ]", ApprovalChoice::Deny),
+            ],
             selected_choice,
             focused,
-        ),
-        "  ".into(),
-        approval_action_span(
-            "[ APV_SESS ]",
-            ApprovalChoice::ApproveSession,
+        );
+    } else {
+        push_approval_actions_line(
+            lines,
+            box_width,
+            vec![
+                ("[ APPROVE ]", ApprovalChoice::Approve),
+                ("[ DENY ]", ApprovalChoice::Deny),
+            ],
             selected_choice,
             focused,
-        ),
-        "  ".into(),
-        approval_action_span("[ DENY ]", ApprovalChoice::Deny, selected_choice, focused),
-        " ".repeat(actions_fill).into(),
-        Span::styled("│", theme::border()),
-    ]));
+        );
+        push_approval_actions_line(
+            lines,
+            box_width,
+            vec![("[ APPROVE SESSION ]", ApprovalChoice::ApproveSession)],
+            selected_choice,
+            focused,
+        );
+    }
     lines.push(Line::from(Span::styled(
         "└".to_string() + &"─".repeat(box_width.saturating_sub(2)) + "┘",
         theme::border(),
     )));
+}
+
+fn push_approval_actions_line(
+    lines: &mut Vec<Line<'static>>,
+    box_width: usize,
+    actions: Vec<(&'static str, ApprovalChoice)>,
+    selected_choice: ApprovalChoice,
+    focused: bool,
+) {
+    let actions_width = actions
+        .iter()
+        .enumerate()
+        .map(|(idx, (label, _))| label.chars().count() + if idx > 0 { 2 } else { 0 })
+        .sum::<usize>();
+    let actions_fill = box_width.saturating_sub(3 + actions_width);
+    let mut spans = vec![Span::styled("│ ", theme::border())];
+    for (idx, (label, choice)) in actions.into_iter().enumerate() {
+        if idx > 0 {
+            spans.push("  ".into());
+        }
+        spans.push(approval_action_span(
+            label,
+            choice,
+            selected_choice,
+            focused,
+        ));
+    }
+    spans.push(" ".repeat(actions_fill).into());
+    spans.push(Span::styled("│", theme::border()));
+    lines.push(Line::from(spans));
 }
 
 fn approval_action_span(
@@ -520,6 +567,48 @@ fn render_composer(area: Rect, buf: &mut Buffer, state: &RedesignState, focused:
     ]))
     .style(theme::app())
     .render(bottom_bordered_content_line(area, 1), buf);
+}
+
+fn composer_cursor_position(area: Rect, state: &RedesignState) -> Option<Position> {
+    if state.overlay != crate::Overlay::None || state.focus != FocusTarget::Composer {
+        return None;
+    }
+
+    let chrome = ChromeHeights::for_area_height(area.height, state.work.is_some());
+    let [_, body_area, _] = Layout::vertical([
+        Constraint::Length(chrome.top),
+        Constraint::Min(0),
+        Constraint::Length(chrome.footer),
+    ])
+    .areas(area);
+    let show_side_nav = body_area.width >= 100;
+    let main_area = if show_side_nav {
+        Rect::new(
+            body_area.x + SIDE_NAV_WIDTH,
+            body_area.y,
+            body_area.width.saturating_sub(SIDE_NAV_WIDTH),
+            body_area.height,
+        )
+    } else {
+        body_area
+    };
+    let [_, _, _, composer_area] = Layout::vertical([
+        Constraint::Length(chrome.secondary),
+        Constraint::Min(0),
+        Constraint::Length(chrome.work_strip),
+        Constraint::Length(chrome.composer),
+    ])
+    .areas(main_area);
+    let content_area = bottom_bordered_content_line(composer_area, 1);
+    if content_area.is_empty() {
+        return None;
+    }
+
+    let input_column = "MSG> ".len() as u16 + state.composer.cursor_display_width();
+    Some(Position {
+        x: content_area.x + input_column.min(content_area.width.saturating_sub(1)),
+        y: content_area.y,
+    })
 }
 
 fn render_work_strip(area: Rect, buf: &mut Buffer, work: &WorkStatus, status: &str) {
@@ -615,11 +704,9 @@ fn render_global_footer(area: Rect, buf: &mut Buffer, shortcuts: &[FooterShortcu
         vec![
             Span::styled("(C) OPENAI_CODEX", theme::primary()),
             "  ".into(),
-            Span::styled("F1 HELP", theme::metadata()),
+            Span::styled("Alt-H HELP", theme::metadata()),
             "  ".into(),
-            Span::styled("F2 CMD", theme::secondary()),
-            "  ".into(),
-            Span::styled("F3 CLR", theme::metadata()),
+            Span::styled("Alt-/ CMD", theme::secondary()),
             "  ".into(),
             Span::styled("ESC EXIT", theme::metadata()),
             "  ".into(),
@@ -641,11 +728,9 @@ fn render_global_footer(area: Rect, buf: &mut Buffer, shortcuts: &[FooterShortcu
             "  ".into(),
         ];
         spans.extend([
-            Span::styled("F1: HELP", theme::metadata()),
+            Span::styled("Alt-H: HELP", theme::metadata()),
             "  ".into(),
-            Span::styled("F2: CMD", theme::secondary()),
-            "  ".into(),
-            Span::styled("F3: CLR", theme::metadata()),
+            Span::styled("Alt-/: CMD", theme::secondary()),
             "  ".into(),
             Span::styled("ESC: EXIT", theme::metadata()),
             "  ".into(),

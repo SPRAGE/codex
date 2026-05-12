@@ -371,6 +371,9 @@ impl ChatWidget {
             SlashCommand::Skills => {
                 self.open_skills_menu();
             }
+            SlashCommand::PersistentSkill => {
+                self.handle_persistent_skill_command("");
+            }
             SlashCommand::Hooks => {
                 self.add_hooks_output();
             }
@@ -761,6 +764,9 @@ impl ChatWidget {
                     instructions: args,
                 }));
             }
+            SlashCommand::PersistentSkill if !trimmed.is_empty() => {
+                self.handle_persistent_skill_command(trimmed);
+            }
             SlashCommand::Resume if !trimmed.is_empty() => {
                 self.app_event_tx
                     .send(AppEvent::ResumeSessionByIdOrName(args));
@@ -924,6 +930,7 @@ impl ChatWidget {
             | SlashCommand::Vim
             | SlashCommand::Diff
             | SlashCommand::Rename
+            | SlashCommand::PersistentSkill
             | SlashCommand::TestApproval => QueueDrain::Continue,
             SlashCommand::Feedback
             | SlashCommand::New

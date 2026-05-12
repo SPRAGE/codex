@@ -53,7 +53,7 @@ pub(super) fn render_overlay(area: Rect, buf: &mut Buffer, state: &RedesignState
                     "  idle / running / approval demo".into(),
                 ]),
                 Line::from(vec![
-                    Span::styled("F2 / Ctrl+P", theme::secondary_fixed()),
+                    Span::styled("Alt-/ / Ctrl+P", theme::secondary_fixed()),
                     "  command palette".into(),
                 ]),
                 Line::from(vec![

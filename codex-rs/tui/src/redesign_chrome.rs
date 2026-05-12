@@ -29,196 +29,35 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
-use ratatui::widgets::Wrap;
 use std::time::Instant;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
-const TOP_ROWS: u16 = 2;
-const CHAT_SEPARATOR_ROWS: u16 = 1;
-const CHAT_HEADER_ROWS: u16 = 1;
-const FOOTER_ROWS: u16 = 1;
+mod layout;
+mod sidebar;
+
+use layout::RedesignLayout;
+use layout::available_chat_body_height;
+use layout::layout_for_dimensions;
+use layout::layout_for_dimensions_with_side;
+use layout::right_rail_width;
+use layout::side_width_for_state;
+pub(crate) use sidebar::RedesignChatActivity;
+pub(crate) use sidebar::RedesignChatListEntry;
+pub(crate) use sidebar::RedesignSidebarItem;
+pub(crate) use sidebar::RedesignSidebarSelection;
+pub(crate) use sidebar::RedesignSidebarState;
+use sidebar::render_side_nav;
+
 const COMPOSER_TOP_RULE_ROWS: u16 = 1;
 const COMPOSER_BOTTOM_RULE_ROWS: u16 = 1;
 const COMPOSER_CHROME_ROWS: u16 = COMPOSER_TOP_RULE_ROWS + COMPOSER_BOTTOM_RULE_ROWS;
 const COMPOSER_ROWS: u16 = COMPOSER_CHROME_ROWS + 1;
 const COMPOSER_LABEL: &str = "MSG> ";
 const COMPOSER_PLACEHOLDER: &str = "Describe the next change...";
-const COMPOSER_INPUT_BG: Color = Color::Rgb(13, 15, 20);
-const WIDE_SIDE_WIDTH: u16 = 24;
-const RIGHT_RAIL_WIDTH: u16 = 30;
-const MIN_WIDE_WIDTH: u16 = 88;
-const MIN_RIGHT_RAIL_WIDTH: u16 = 120;
-const COMPACT_SIDE_WIDTH: u16 = 22;
-const MIN_COMPACT_SIDEBAR_WIDTH: u16 = 56;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct RedesignSidebarState {
-    focused: bool,
-    selected: RedesignSidebarSelection,
-}
-
-impl Default for RedesignSidebarState {
-    fn default() -> Self {
-        Self {
-            focused: false,
-            selected: RedesignSidebarSelection::Chat(0),
-        }
-    }
-}
-
-impl RedesignSidebarState {
-    pub(crate) fn focused(self) -> bool {
-        self.focused
-    }
-
-    pub(crate) fn selected(self) -> RedesignSidebarSelection {
-        self.selected
-    }
-
-    pub(crate) fn toggle_focus(&mut self, chat_count: usize) {
-        self.focused = !self.focused;
-        if self.focused {
-            self.normalize_selection(chat_count);
-        }
-    }
-
-    pub(crate) fn blur(&mut self) {
-        self.focused = false;
-    }
-
-    pub(crate) fn select_previous(&mut self, chat_count: usize) {
-        self.normalize_selection(chat_count);
-        self.selected = match self.selected {
-            RedesignSidebarSelection::Chat(idx) if idx > 0 => {
-                RedesignSidebarSelection::Chat(idx - 1)
-            }
-            RedesignSidebarSelection::Chat(_) => {
-                RedesignSidebarSelection::Action(RedesignSidebarItem::Editor)
-            }
-            RedesignSidebarSelection::Action(RedesignSidebarItem::NewChat) if chat_count > 0 => {
-                RedesignSidebarSelection::Chat(chat_count - 1)
-            }
-            RedesignSidebarSelection::Action(item) => {
-                RedesignSidebarSelection::Action(item.previous())
-            }
-        };
-    }
-
-    pub(crate) fn select_next(&mut self, chat_count: usize) {
-        self.normalize_selection(chat_count);
-        self.selected = match self.selected {
-            RedesignSidebarSelection::Chat(idx) if idx + 1 < chat_count => {
-                RedesignSidebarSelection::Chat(idx + 1)
-            }
-            RedesignSidebarSelection::Chat(_) => {
-                RedesignSidebarSelection::Action(RedesignSidebarItem::Commands)
-            }
-            RedesignSidebarSelection::Action(RedesignSidebarItem::Editor) if chat_count > 0 => {
-                RedesignSidebarSelection::Chat(0)
-            }
-            RedesignSidebarSelection::Action(item) => RedesignSidebarSelection::Action(item.next()),
-        };
-    }
-
-    fn normalize_selection(&mut self, chat_count: usize) {
-        if chat_count == 0 {
-            if matches!(self.selected, RedesignSidebarSelection::Chat(_)) {
-                self.selected = RedesignSidebarSelection::Action(RedesignSidebarItem::NewChat);
-            }
-            return;
-        }
-
-        if let RedesignSidebarSelection::Chat(idx) = self.selected
-            && idx >= chat_count
-        {
-            self.selected = RedesignSidebarSelection::Chat(chat_count - 1);
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RedesignSidebarSelection {
-    Chat(usize),
-    Action(RedesignSidebarItem),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RedesignSidebarItem {
-    NewChat,
-    FinalOnly,
-    Commands,
-    Models,
-    History,
-    Transcript,
-    Editor,
-}
-
-impl RedesignSidebarItem {
-    const ALL: [Self; 7] = [
-        Self::NewChat,
-        Self::FinalOnly,
-        Self::Commands,
-        Self::Models,
-        Self::History,
-        Self::Transcript,
-        Self::Editor,
-    ];
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::NewChat => "NEW CHAT",
-            Self::FinalOnly => "FINAL ONLY",
-            Self::Commands => "COMMANDS",
-            Self::Models => "MODELS",
-            Self::History => "HISTORY",
-            Self::Transcript => "TRANSCRIPT",
-            Self::Editor => "EDITOR",
-        }
-    }
-
-    fn hint(self) -> &'static str {
-        match self {
-            Self::NewChat => "N",
-            Self::FinalOnly => "F",
-            Self::Commands => "F2",
-            Self::Models => "F4",
-            Self::History => "C-R",
-            Self::Transcript => "C-T",
-            Self::Editor => "C-G",
-        }
-    }
-
-    fn previous(self) -> Self {
-        let idx = Self::ALL.iter().position(|item| *item == self).unwrap_or(0);
-        let next_idx = idx.checked_sub(1).unwrap_or(Self::ALL.len() - 1);
-        Self::ALL[next_idx]
-    }
-
-    fn next(self) -> Self {
-        let idx = Self::ALL.iter().position(|item| *item == self).unwrap_or(0);
-        Self::ALL[(idx + 1) % Self::ALL.len()]
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RedesignChatActivity {
-    Idle,
-    Working,
-    Done,
-    NeedsInput,
-    Failed,
-    Closed,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct RedesignChatListEntry {
-    pub(crate) thread_id: codex_protocol::ThreadId,
-    pub(crate) label: String,
-    pub(crate) activity: RedesignChatActivity,
-    pub(crate) is_active: bool,
-    pub(crate) unread: bool,
-}
+const COMPOSER_INPUT_BG: Color = Color::DarkGray;
+const MESSAGE_QUEUE_MAX_ROWS: usize = 4;
+const MESSAGE_QUEUE_MESSAGE_LINE_LIMIT: usize = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct RedesignChromeContext {
@@ -234,6 +73,7 @@ pub(crate) struct RedesignChromeContext {
     branch: String,
     changes: String,
     thread: String,
+    assistant_label: String,
     working: bool,
     animations_enabled: bool,
     work_started_at: Option<Instant>,
@@ -287,6 +127,7 @@ impl RedesignChromeContext {
             branch,
             changes,
             thread,
+            assistant_label: app.redesign_assistant_transcript_label(),
             working: app.chat_widget.redesign_task_running(),
             animations_enabled: app.chat_widget.redesign_animations_enabled(),
             work_started_at: app.chat_widget.redesign_work_started_at(),
@@ -316,6 +157,7 @@ impl RedesignChromeContext {
             branch: "redesign-tui".to_string(),
             changes: "3 files".to_string(),
             thread: "Improve terminal UI".to_string(),
+            assistant_label: "Codex".to_string(),
             working: true,
             animations_enabled: true,
             work_started_at: None,
@@ -364,7 +206,15 @@ enum BubbleAlign {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct TranscriptBlock {
     role: TranscriptRole,
+    speaker_label: Option<String>,
     lines: Vec<Line<'static>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TranscriptBlockInput {
+    role: TranscriptRole,
+    lines: Vec<Line<'static>>,
+    is_stream_continuation: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -373,16 +223,11 @@ struct SystemRailBlock {
     lines: Vec<Line<'static>>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct RedesignLayout {
-    side: Rect,
-    main: Rect,
-    right: Rect,
-    chat_separator: Rect,
-    chat_header: Rect,
-    transcript: Rect,
-    composer: Rect,
-    footer: Rect,
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TranscriptDisplayWindow {
+    lines: Vec<Line<'static>>,
+    hidden_above: bool,
+    hidden_below: bool,
 }
 
 pub(crate) fn render_app(area: Rect, buf: &mut Buffer, app: &App) -> AppFrameRender {
@@ -394,16 +239,16 @@ pub(crate) fn render_app(area: Rect, buf: &mut Buffer, app: &App) -> AppFrameRen
     render_chrome(area, buf, &context, app.redesign_sidebar_state);
     app.chat_widget
         .redesign_schedule_work_indicator_frame_if_needed();
-    let transcript_blocks = transcript_blocks(app, layout.transcript.width);
-    let system_blocks = system_rail_blocks(app, layout.right.width);
-    let scroll_limit = transcript_scroll_limit_for_blocks(layout.transcript, &transcript_blocks);
-    render_transcript(
+    let route_system_cells_to_rail = should_route_system_cells_to_rail(layout.right.width, app);
+    render_transcript_from_app(
         layout.transcript,
         buf,
-        &transcript_blocks,
-        app.redesign_transcript_scroll.min(scroll_limit),
+        app,
+        route_system_cells_to_rail,
+        app.redesign_transcript_scroll,
+        &context.assistant_label,
     );
-    render_system_rail(layout.right, buf, &context, &system_blocks);
+    render_system_rail_from_app(layout.right, buf, &context, app);
     if legacy_bottom_pane {
         app.chat_widget
             .render_redesign_bottom_pane(layout.composer, buf);
@@ -417,11 +262,14 @@ pub(crate) fn render_app(area: Rect, buf: &mut Buffer, app: &App) -> AppFrameRen
         };
     }
 
+    let draft = app.chat_widget.redesign_composer_text();
+    let queued_messages = app.chat_widget.redesign_queued_message_texts();
     let cursor_pos = render_composer(
         layout.composer,
         buf,
-        &app.chat_widget.redesign_composer_text(),
-        composer_activity_indicator(&context),
+        &draft,
+        app.chat_widget.redesign_composer_cursor(),
+        &queued_messages,
     );
     AppFrameRender {
         cursor_pos,
@@ -445,8 +293,17 @@ pub(crate) fn transcript_scroll_limit(area: Rect, app: &App) -> usize {
         app,
         app.chat_widget.redesign_should_render_bottom_pane(),
     );
-    let blocks = transcript_blocks(app, layout.transcript.width);
-    transcript_scroll_limit_for_blocks(layout.transcript, &blocks)
+    let blocks = transcript_blocks(
+        app,
+        layout.transcript.width,
+        should_route_system_cells_to_rail(layout.right.width, app),
+    );
+    let assistant_label = app.redesign_assistant_transcript_label();
+    transcript_scroll_limit_for_blocks_with_assistant_label(
+        layout.transcript,
+        &blocks,
+        &assistant_label,
+    )
 }
 
 pub(crate) fn render_chrome(
@@ -478,93 +335,22 @@ fn layout_for(area: Rect, app: &App, legacy_bottom_pane: bool) -> RedesignLayout
     let main_width = area
         .width
         .saturating_sub(side_width + right_rail_width(area.width, side_width));
-    let available_body_height = area.height.saturating_sub(TOP_ROWS + FOOTER_ROWS);
-    let available_chat_body_height =
-        available_body_height.saturating_sub(CHAT_SEPARATOR_ROWS + CHAT_HEADER_ROWS);
+    let available_chat_body_height = available_chat_body_height(area);
     let composer_height = if legacy_bottom_pane {
         app.chat_widget
             .redesign_bottom_pane_desired_height(main_width)
             .min(available_chat_body_height.max(1))
             .max(1)
     } else {
-        let desired_height = composer_desired_height(
-            main_width,
-            &app.chat_widget.redesign_composer_text(),
-            app.chat_widget.redesign_task_running(),
-        );
+        let draft = app.chat_widget.redesign_composer_text();
+        let queued_messages = app.chat_widget.redesign_queued_message_texts();
+        let desired_height = composer_desired_height(main_width, &draft, &queued_messages);
         desired_height
             .min(available_chat_body_height)
             .max(COMPOSER_ROWS.min(available_chat_body_height))
     };
 
     layout_for_dimensions_with_side(area, side_width, composer_height)
-}
-
-fn layout_for_dimensions(area: Rect, composer_height: u16) -> RedesignLayout {
-    layout_for_dimensions_with_side(area, side_width(area.width), composer_height)
-}
-
-fn layout_for_dimensions_with_side(
-    area: Rect,
-    side_width: u16,
-    composer_height: u16,
-) -> RedesignLayout {
-    if area.is_empty() {
-        return RedesignLayout {
-            side: Rect::new(area.x, area.y, 0, 0),
-            main: Rect::new(area.x, area.y, 0, 0),
-            right: Rect::new(area.x, area.y, 0, 0),
-            chat_separator: Rect::new(area.x, area.y, 0, 0),
-            chat_header: Rect::new(area.x, area.y, 0, 0),
-            transcript: Rect::new(area.x, area.y, 0, 0),
-            composer: Rect::new(area.x, area.y, 0, 0),
-            footer: Rect::new(area.x, area.y, 0, 0),
-        };
-    }
-
-    let footer = Rect::new(
-        area.x,
-        area.bottom().saturating_sub(FOOTER_ROWS),
-        area.width,
-        FOOTER_ROWS.min(area.height),
-    );
-    let body_y = area.y.saturating_add(TOP_ROWS.min(area.height));
-    let body_bottom = footer.y;
-    let body_height = body_bottom.saturating_sub(body_y);
-    let side = Rect::new(area.x, body_y, side_width, body_height);
-    let right_width = right_rail_width(area.width, side_width);
-    let main = Rect::new(
-        area.x.saturating_add(side_width),
-        body_y,
-        area.width.saturating_sub(side_width + right_width),
-        body_height,
-    );
-    let right = Rect::new(main.right(), body_y, right_width, body_height);
-    let chat_header_height = CHAT_HEADER_ROWS.min(main.height);
-    let chat_header = Rect::new(main.x, main.y, main.width, chat_header_height);
-    let chat_separator_y = main.y.saturating_add(chat_header_height);
-    let chat_separator_height =
-        CHAT_SEPARATOR_ROWS.min(main.height.saturating_sub(chat_header_height));
-    let chat_separator = Rect::new(main.x, chat_separator_y, main.width, chat_separator_height);
-    let chat_body_y = chat_separator_y.saturating_add(chat_separator_height);
-    let chat_body_height = main
-        .height
-        .saturating_sub(chat_header_height + chat_separator_height);
-    let composer_height = composer_height.min(chat_body_height);
-    let transcript_height = chat_body_height.saturating_sub(composer_height);
-    let transcript = Rect::new(main.x, chat_body_y, main.width, transcript_height);
-    let composer = Rect::new(main.x, transcript.bottom(), main.width, composer_height);
-
-    RedesignLayout {
-        side,
-        main,
-        right,
-        chat_separator,
-        chat_header,
-        transcript,
-        composer,
-        footer,
-    }
 }
 
 fn render_background(area: Rect, buf: &mut Buffer) {
@@ -601,24 +387,40 @@ fn render_chat_bar(area: Rect, buf: &mut Buffer, context: &RedesignChromeContext
         return;
     }
 
-    let mut spans = if area.width >= 72 {
-        vec![
+    let work_label = if context.working {
+        "working".green().bold()
+    } else {
+        "ready".dim()
+    };
+    let activity_indicator = work_activity_indicator(context);
+    let mut spans = Vec::new();
+    if let Some(indicator) = activity_indicator {
+        spans.push(indicator);
+        spans.push(" ".into());
+    }
+
+    if area.width >= 72 {
+        spans.extend([
+            work_label,
+            "  ".into(),
             "chat ".dim(),
             Span::from(format!("{} {}", context.model, context.reasoning)).magenta(),
             "  ctx ".dim(),
             Span::from(context.context_left.clone()),
             "  tokens ".dim(),
             Span::from(token_usage_label(&context.token_usage)).cyan(),
-        ]
+        ]);
     } else {
-        vec![
+        spans.extend([
+            work_label,
+            " | ".into(),
             Span::from(format!("{} {}", context.model, context.reasoning)).magenta(),
             " | ctx ".dim(),
             Span::from(context.context_left.clone()),
             " | tok ".dim(),
             Span::from(token_usage_label(&context.token_usage)).cyan(),
-        ]
-    };
+        ]);
+    }
     if let Some(pricing) = &context.pricing {
         spans.push("  price ".dim());
         spans.push(Span::from(pricing.clone()).green());
@@ -636,213 +438,165 @@ fn token_usage_label(usage: &TokenUsage) -> String {
     )
 }
 
-fn render_side_nav(
-    area: Rect,
-    buf: &mut Buffer,
-    context: &RedesignChromeContext,
-    sidebar: RedesignSidebarState,
-) {
-    if area.is_empty() {
-        return;
-    }
-
-    let content_area = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
-    let content_width = content_area.width;
-    let mut lines = vec![
-        Line::from(vec![" ".into(), "CHATS".cyan().bold()]),
-        Line::from(vec![
-            " ".into(),
-            if sidebar.focused() {
-                "C-B close".magenta().bold()
-            } else {
-                "C-B focus".dim()
-            },
-        ]),
-        Line::from(""),
-    ];
-    let action_row_count = 2 + RedesignSidebarItem::ALL.len() as u16;
-    let fixed_sidebar_rows = lines.len() as u16 + action_row_count;
-    let chat_row_capacity = area.height.saturating_sub(fixed_sidebar_rows) as usize;
-    if context.chats.is_empty() {
-        lines.push(Line::from(vec![" ".into(), "No chats yet".dim()]));
-    } else if chat_row_capacity > 0 {
-        let selected_chat_idx = match sidebar.selected() {
-            RedesignSidebarSelection::Chat(idx) => idx.min(context.chats.len() - 1),
-            RedesignSidebarSelection::Action(_) => 0,
-        };
-        let chat_start = selected_chat_idx.saturating_sub(chat_row_capacity.saturating_sub(1));
-        let chat_end = (chat_start + chat_row_capacity).min(context.chats.len());
-        lines.extend(context.chats[chat_start..chat_end].iter().enumerate().map(
-            |(offset, chat)| chat_item_line(chat_start + offset, chat, sidebar, content_width),
-        ));
-    }
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![" ".into(), "ACTIONS".cyan().bold()]));
-    lines.extend(
-        RedesignSidebarItem::ALL
-            .into_iter()
-            .map(|item| sidebar_item_line(item, sidebar, context.final_only)),
-    );
-    Paragraph::new(lines).render(content_area, buf);
-
-    let border_x = area.right().saturating_sub(1);
-    for y in area.y..area.bottom() {
-        buf[(border_x, y)]
-            .set_symbol("|")
-            .set_style(Style::new().dim());
-    }
-}
-
-fn chat_item_line(
-    idx: usize,
-    chat: &RedesignChatListEntry,
-    sidebar: RedesignSidebarState,
-    content_width: u16,
-) -> Line<'static> {
-    let selected = sidebar.selected() == RedesignSidebarSelection::Chat(idx);
-    let marker = if selected && sidebar.focused() {
-        "› ".magenta().bold()
-    } else if selected {
-        "• ".cyan()
-    } else {
-        "  ".into()
-    };
-    let status = chat_status_span(chat);
-    let label = truncate_text(&chat.label, content_width.saturating_sub(9));
-    let label = if chat.is_active {
-        Span::from(label).bold()
-    } else if chat.unread {
-        Span::from(label).cyan().bold()
-    } else if chat.activity == RedesignChatActivity::Closed {
-        Span::from(label).dim()
-    } else {
-        Span::from(label)
-    };
-
-    Line::from(vec![marker, status, " ".into(), label])
-}
-
-fn sidebar_item_line(
-    item: RedesignSidebarItem,
-    sidebar: RedesignSidebarState,
-    final_only: bool,
-) -> Line<'static> {
-    let selected = sidebar.selected() == RedesignSidebarSelection::Action(item);
-    let marker = if selected && sidebar.focused() {
-        "› ".magenta().bold()
-    } else if selected {
-        "• ".cyan()
-    } else {
-        "  ".into()
-    };
-    let hint = format!("{:<6}", item.hint());
-    let label = if item == RedesignSidebarItem::FinalOnly {
-        if final_only {
-            "FINAL ONLY ON"
-        } else {
-            "FINAL ONLY OFF"
-        }
-    } else {
-        item.label()
-    };
-
-    if selected && sidebar.focused() {
-        Line::from(vec![
-            marker,
-            hint.magenta().bold(),
-            " ".into(),
-            label.bold(),
-        ])
-    } else if selected {
-        Line::from(vec![marker, hint.cyan(), " ".into(), label.cyan().bold()])
-    } else {
-        Line::from(vec![marker, hint.dim(), " ".into(), label.dim()])
-    }
-}
-
-fn chat_status_span(chat: &RedesignChatListEntry) -> Span<'static> {
-    let label = if chat.is_active {
-        "active"
-    } else if chat.unread {
-        "unread"
-    } else {
-        match chat.activity {
-            RedesignChatActivity::Idle => "idle",
-            RedesignChatActivity::Working => "work",
-            RedesignChatActivity::Done => "done",
-            RedesignChatActivity::NeedsInput => "needs",
-            RedesignChatActivity::Failed => "failed",
-            RedesignChatActivity::Closed => "closed",
-        }
-    };
-    let label = format!("{label:<6}");
-
-    if chat.is_active || chat.unread {
-        label.cyan().bold()
-    } else {
-        match chat.activity {
-            RedesignChatActivity::Idle | RedesignChatActivity::Closed => label.dim(),
-            RedesignChatActivity::Working => label.green(),
-            RedesignChatActivity::Done => label.cyan(),
-            RedesignChatActivity::NeedsInput => label.magenta().bold(),
-            RedesignChatActivity::Failed => label.red().bold(),
-        }
-    }
-}
-
+#[cfg(test)]
 fn render_transcript(
     area: Rect,
     buf: &mut Buffer,
     blocks: &[TranscriptBlock],
     scroll_offset: usize,
 ) {
+    render_transcript_with_assistant_label(area, buf, blocks, scroll_offset, "Codex");
+}
+
+#[cfg(test)]
+fn render_transcript_with_assistant_label(
+    area: Rect,
+    buf: &mut Buffer,
+    blocks: &[TranscriptBlock],
+    scroll_offset: usize,
+    assistant_label: &str,
+) {
     if area.is_empty() {
         return;
     }
 
-    let lines = transcript_display_lines(blocks, area.width);
+    let lines = transcript_display_lines_with_assistant_label(blocks, area.width, assistant_label);
     let scroll_limit = lines.len().saturating_sub(area.height as usize);
     let scroll_offset = scroll_offset.min(scroll_limit);
-    let visible_start = lines
-        .len()
-        .saturating_sub((area.height as usize).saturating_add(scroll_offset));
-    let visible = lines
-        .into_iter()
-        .skip(visible_start)
-        .take(area.height as usize)
-        .collect::<Vec<_>>();
-    Paragraph::new(visible)
-        .wrap(Wrap { trim: false })
-        .render(area, buf);
-
-    if scroll_limit > 0 && area.width > 2 {
-        let scrollbar_x = area.right().saturating_sub(1);
-        for y in area.y..area.bottom() {
-            buf[(scrollbar_x, y)]
-                .set_symbol("|")
-                .set_style(Style::new().dim());
-        }
-        let thumb_range = area.height.saturating_sub(1) as usize;
-        let thumb_offset = (scroll_limit - scroll_offset) * thumb_range / scroll_limit;
-        let thumb_y = area
-            .y
-            .saturating_add(thumb_offset as u16)
-            .min(area.bottom().saturating_sub(1));
-        buf[(scrollbar_x, thumb_y)].set_symbol("#");
-    }
+    let window = visible_tail_window(lines, area.height as usize, scroll_offset);
+    Paragraph::new(window.lines).render(area, buf);
+    render_transcript_scrollbar(
+        area,
+        buf,
+        window.hidden_above,
+        window.hidden_below,
+        scroll_offset,
+        Some(scroll_limit),
+    );
 }
 
-fn transcript_scroll_limit_for_blocks(area: Rect, blocks: &[TranscriptBlock]) -> usize {
+fn render_transcript_from_app(
+    area: Rect,
+    buf: &mut Buffer,
+    app: &App,
+    route_system_cells_to_rail: bool,
+    scroll_offset: usize,
+    assistant_label: &str,
+) {
+    if area.is_empty() {
+        return;
+    }
+
+    let window = transcript_display_window_from_app(
+        app,
+        area.width,
+        area.height as usize,
+        route_system_cells_to_rail,
+        scroll_offset,
+        assistant_label,
+    );
+    Paragraph::new(window.lines).render(area, buf);
+    render_transcript_scrollbar(
+        area,
+        buf,
+        window.hidden_above,
+        window.hidden_below,
+        scroll_offset,
+        None,
+    );
+}
+
+fn transcript_scroll_limit_for_blocks_with_assistant_label(
+    area: Rect,
+    blocks: &[TranscriptBlock],
+    assistant_label: &str,
+) -> usize {
     if area.is_empty() {
         return 0;
     }
 
-    transcript_display_lines(blocks, area.width)
+    transcript_display_lines_with_assistant_label(blocks, area.width, assistant_label)
         .len()
         .saturating_sub(area.height as usize)
 }
 
-fn transcript_display_lines(blocks: &[TranscriptBlock], width: u16) -> Vec<Line<'static>> {
+fn transcript_display_window_from_app(
+    app: &App,
+    width: u16,
+    height: usize,
+    route_system_cells_to_rail: bool,
+    scroll_offset: usize,
+    assistant_label: &str,
+) -> TranscriptDisplayWindow {
+    let target_lines = height.saturating_add(scroll_offset).saturating_add(1);
+    let content_width = width.saturating_sub(4).max(1);
+    let mut inputs_rev = Vec::new();
+    let mut stopped_early = false;
+    let mut lines = Vec::new();
+
+    if let Some(input) = active_final_transcript_input(app, content_width) {
+        inputs_rev.push(input);
+        lines = transcript_display_lines_from_reverse_inputs(&inputs_rev, width, assistant_label);
+    }
+
+    if lines.len() < target_lines
+        && !app.redesign_final_only_transcript
+        && !route_system_cells_to_rail
+        && let Some(input) = active_system_transcript_input(app, content_width)
+    {
+        inputs_rev.push(input);
+        lines = transcript_display_lines_from_reverse_inputs(&inputs_rev, width, assistant_label);
+    }
+
+    if lines.len() < target_lines {
+        for cell in app.transcript_cells.iter().rev() {
+            let cell = cell.as_ref();
+            let Some(input) =
+                transcript_input_for_cell(app, cell, content_width, route_system_cells_to_rail)
+            else {
+                continue;
+            };
+            inputs_rev.push(input);
+            lines =
+                transcript_display_lines_from_reverse_inputs(&inputs_rev, width, assistant_label);
+            if lines.len() >= target_lines {
+                stopped_early = true;
+                break;
+            }
+        }
+    }
+
+    if inputs_rev.is_empty() {
+        lines = transcript_display_lines_with_assistant_label(&[], width, assistant_label);
+    }
+
+    let mut window = visible_tail_window(lines, height, scroll_offset);
+    window.hidden_above |= stopped_early;
+    window
+}
+
+fn transcript_display_lines_from_reverse_inputs(
+    inputs_rev: &[TranscriptBlockInput],
+    width: u16,
+    assistant_label: &str,
+) -> Vec<Line<'static>> {
+    let mut blocks = Vec::new();
+    for input in inputs_rev.iter().rev() {
+        push_transcript_block(
+            &mut blocks,
+            input.role,
+            input.lines.clone(),
+            input.is_stream_continuation,
+        );
+    }
+    transcript_display_lines_with_assistant_label(&blocks, width, assistant_label)
+}
+
+fn transcript_display_lines_with_assistant_label(
+    blocks: &[TranscriptBlock],
+    width: u16,
+    assistant_label: &str,
+) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     if blocks.is_empty() {
         lines.push(Line::from(vec![
@@ -854,22 +608,112 @@ fn transcript_display_lines(blocks: &[TranscriptBlock], width: u16) -> Vec<Line<
             if !lines.is_empty() {
                 lines.push(Line::from(""));
             }
-            lines.extend(bubble_lines(block, width));
+            lines.extend(bubble_lines_with_assistant_label(
+                block,
+                width,
+                assistant_label,
+            ));
         }
     }
     lines
 }
 
+fn visible_tail_window(
+    lines: Vec<Line<'static>>,
+    height: usize,
+    scroll_offset: usize,
+) -> TranscriptDisplayWindow {
+    let visible_start = lines
+        .len()
+        .saturating_sub(height.saturating_add(scroll_offset));
+    let visible_end = visible_start.saturating_add(height).min(lines.len());
+    let hidden_above = visible_start > 0;
+    let hidden_below = visible_end < lines.len();
+    let lines = lines
+        .into_iter()
+        .skip(visible_start)
+        .take(visible_end.saturating_sub(visible_start))
+        .collect();
+    TranscriptDisplayWindow {
+        lines,
+        hidden_above,
+        hidden_below,
+    }
+}
+
+fn render_transcript_scrollbar(
+    area: Rect,
+    buf: &mut Buffer,
+    hidden_above: bool,
+    hidden_below: bool,
+    scroll_offset: usize,
+    exact_scroll_limit: Option<usize>,
+) {
+    if area.width <= 2 || (!hidden_above && !hidden_below) {
+        return;
+    }
+
+    let scrollbar_x = area.right().saturating_sub(1);
+    for y in area.y..area.bottom() {
+        buf[(scrollbar_x, y)]
+            .set_symbol("|")
+            .set_style(Style::new().dim());
+    }
+
+    let thumb_y =
+        if let Some(scroll_limit) = exact_scroll_limit.filter(|scroll_limit| *scroll_limit > 0) {
+            let scroll_offset = scroll_offset.min(scroll_limit);
+            let thumb_range = area.height.saturating_sub(1) as usize;
+            let thumb_offset = (scroll_limit - scroll_offset) * thumb_range / scroll_limit;
+            area.y
+                .saturating_add(thumb_offset as u16)
+                .min(area.bottom().saturating_sub(1))
+        } else {
+            match (hidden_above, hidden_below) {
+                (true, false) => area.bottom().saturating_sub(1),
+                (false, true) => area.y,
+                (true, true) => area.y.saturating_add(area.height.saturating_sub(1) / 2),
+                (false, false) => area.y,
+            }
+        };
+    buf[(scrollbar_x, thumb_y)].set_symbol("#");
+}
+
+#[cfg(test)]
 fn render_system_rail(
     area: Rect,
     buf: &mut Buffer,
     context: &RedesignChromeContext,
     blocks: &[SystemRailBlock],
 ) {
-    if area.is_empty() {
+    let Some((content, header, body_capacity)) = system_rail_frame(area, buf, context) else {
         return;
-    }
+    };
+    let body = system_rail_display_lines(blocks, content.width);
+    render_system_rail_lines(content, header, body, body_capacity, buf);
+}
 
+fn render_system_rail_from_app(
+    area: Rect,
+    buf: &mut Buffer,
+    context: &RedesignChromeContext,
+    app: &App,
+) {
+    let Some((content, header, body_capacity)) = system_rail_frame(area, buf, context) else {
+        return;
+    };
+    let body = system_rail_tail_display_lines(app, content.width, body_capacity);
+    render_system_rail_lines(content, header, body, body_capacity, buf);
+}
+
+fn system_rail_frame(
+    area: Rect,
+    buf: &mut Buffer,
+    context: &RedesignChromeContext,
+) -> Option<(Rect, Vec<Line<'static>>, usize)> {
+    if area.is_empty() {
+        return None;
+    }
     for y in area.y..area.bottom() {
         buf[(area.x, y)]
             .set_symbol("|")
@@ -882,7 +726,7 @@ fn render_system_rail(
         area.height,
     );
     if content.is_empty() {
-        return;
+        return None;
     }
 
     let permissions = truncate_text(&context.permissions, content.width.saturating_sub(7));
@@ -892,13 +736,21 @@ fn render_system_rail(
         Line::from(vec![" ".into(), "SYSTEM".cyan().bold()]),
         Line::from(vec![" ".into(), "perm ".dim(), permissions.cyan()]),
         Line::from(vec![" ".into(), "appv ".dim(), approval.magenta()]),
-        Line::from(vec![" ".into(), "thinking + events".dim()]),
+        Line::from(vec![" ".into(), "details rail".dim()]),
         Line::from(""),
     ];
     let body_capacity = content.height.saturating_sub(header.len() as u16) as usize;
-    let body = system_rail_display_lines(blocks, content.width);
+    Some((content, header, body_capacity))
+}
+
+fn render_system_rail_lines(
+    content: Rect,
+    mut lines: Vec<Line<'static>>,
+    body: Vec<Line<'static>>,
+    body_capacity: usize,
+    buf: &mut Buffer,
+) {
     let body_start = body.len().saturating_sub(body_capacity);
-    let mut lines = header;
     lines.extend(body.into_iter().skip(body_start).take(body_capacity));
 
     Paragraph::new(lines).render(content, buf);
@@ -929,7 +781,85 @@ fn system_rail_display_lines(blocks: &[SystemRailBlock], width: u16) -> Vec<Line
     lines
 }
 
-fn composer_activity_indicator(context: &RedesignChromeContext) -> Option<Span<'static>> {
+fn system_rail_tail_display_lines(
+    app: &App,
+    width: u16,
+    body_capacity: usize,
+) -> Vec<Line<'static>> {
+    if width == 0 {
+        return Vec::new();
+    }
+    if app.redesign_final_only_transcript {
+        return vec![Line::from(vec![" ".into(), "No system activity".dim()])];
+    }
+
+    if body_capacity == 0 {
+        return Vec::new();
+    }
+
+    let target_lines = body_capacity.saturating_add(1);
+    let content_width = width.saturating_sub(4).max(1);
+    let mut blocks_rev = Vec::new();
+    let mut lines = Vec::new();
+
+    if let Some(active) = app
+        .chat_widget
+        .redesign_active_system_display(content_width)
+    {
+        let lines_for_block = display_lines_to_content(active.lines);
+        if !lines_for_block.is_empty() {
+            blocks_rev.push(SystemRailBlock {
+                title: "ACTIVE",
+                lines: lines_for_block,
+            });
+            lines = system_rail_display_lines_from_reverse_blocks(&blocks_rev, width);
+        }
+    }
+
+    if lines.len() < target_lines {
+        for cell in app.transcript_cells.iter().rev() {
+            let cell = cell.as_ref();
+            let Some(block) = system_rail_block_for_cell(cell, content_width) else {
+                continue;
+            };
+            blocks_rev.push(block);
+            lines = system_rail_display_lines_from_reverse_blocks(&blocks_rev, width);
+            if lines.len() >= target_lines {
+                break;
+            }
+        }
+    }
+
+    if blocks_rev.is_empty() {
+        return vec![Line::from(vec![" ".into(), "No system activity".dim()])];
+    }
+    lines
+}
+
+fn system_rail_display_lines_from_reverse_blocks(
+    blocks_rev: &[SystemRailBlock],
+    width: u16,
+) -> Vec<Line<'static>> {
+    let blocks = blocks_rev.iter().rev().cloned().collect::<Vec<_>>();
+    system_rail_display_lines(&blocks, width)
+}
+
+fn system_rail_block_for_cell(
+    cell: &dyn HistoryCell,
+    content_width: u16,
+) -> Option<SystemRailBlock> {
+    if !is_system_rail_cell(cell) {
+        return None;
+    }
+
+    let lines = cell_content_lines(cell, content_width);
+    (!lines.is_empty()).then_some(SystemRailBlock {
+        title: system_rail_title(cell),
+        lines,
+    })
+}
+
+fn work_activity_indicator(context: &RedesignChromeContext) -> Option<Span<'static>> {
     if context.working {
         let motion_mode = MotionMode::from_animations_enabled(context.animations_enabled);
         rotating_activity_indicator(
@@ -942,12 +872,128 @@ fn composer_activity_indicator(context: &RedesignChromeContext) -> Option<Span<'
     }
 }
 
+fn message_queue_desired_height(width: u16, queued_messages: &[String]) -> u16 {
+    if width == 0 || queued_messages.is_empty() {
+        return 0;
+    }
+
+    1 + u16::try_from(message_queue_lines(width, queued_messages).len()).unwrap_or(u16::MAX)
+}
+
+fn render_message_queue(area: Rect, buf: &mut Buffer, queued_messages: &[String]) {
+    if area.is_empty() || queued_messages.is_empty() {
+        return;
+    }
+
+    draw_horizontal_rule(area, buf, area.y);
+    let content_area = Rect::new(
+        area.x,
+        area.y.saturating_add(1),
+        area.width,
+        area.height.saturating_sub(1),
+    );
+    if content_area.is_empty() {
+        return;
+    }
+
+    let lines = message_queue_lines(content_area.width, queued_messages)
+        .into_iter()
+        .take(content_area.height as usize)
+        .collect::<Vec<_>>();
+    Paragraph::new(lines).render(content_area, buf);
+}
+
+fn message_queue_lines(width: u16, queued_messages: &[String]) -> Vec<Line<'static>> {
+    if width == 0 || queued_messages.is_empty() {
+        return Vec::new();
+    }
+
+    let mut lines = vec![Line::from(vec![
+        "QUE> ".cyan().bold(),
+        queued_message_count_label(queued_messages.len()).dim(),
+    ])];
+
+    for message in queued_messages {
+        let wrapped = adaptive_wrap_lines(
+            message.lines().map(|line| Line::from(line.dim().italic())),
+            RtOptions::new(width as usize)
+                .initial_indent(Line::from("  ↳ ".dim()))
+                .subsequent_indent(Line::from("    ")),
+        );
+        let wrapped_len = wrapped.len();
+        lines.extend(wrapped.into_iter().take(MESSAGE_QUEUE_MESSAGE_LINE_LIMIT));
+        if wrapped_len > MESSAGE_QUEUE_MESSAGE_LINE_LIMIT {
+            lines.push(Line::from("    …".dim().italic()));
+        }
+        if lines.len() >= MESSAGE_QUEUE_MAX_ROWS {
+            break;
+        }
+    }
+
+    if lines.len() > MESSAGE_QUEUE_MAX_ROWS {
+        lines.truncate(MESSAGE_QUEUE_MAX_ROWS);
+    }
+    if queued_messages.len() > 1
+        && lines.len() == MESSAGE_QUEUE_MAX_ROWS
+        && queued_messages.len() > rendered_queue_message_count(&lines)
+    {
+        let remaining = queued_messages
+            .len()
+            .saturating_sub(rendered_queue_message_count(&lines));
+        if remaining > 0
+            && let Some(last) = lines.last_mut()
+        {
+            *last = Line::from(format!("  +{remaining} more queued").dim());
+        }
+    }
+
+    lines
+}
+
+fn queued_message_count_label(count: usize) -> String {
+    if count == 1 {
+        "1 queued message".to_string()
+    } else {
+        format!("{count} queued messages")
+    }
+}
+
+fn rendered_queue_message_count(lines: &[Line<'_>]) -> usize {
+    lines
+        .iter()
+        .filter(|line| {
+            line.spans
+                .first()
+                .is_some_and(|span| span.content.as_ref().starts_with("  ↳ "))
+        })
+        .count()
+}
+
 fn render_composer(
     area: Rect,
     buf: &mut Buffer,
     draft: &str,
-    activity_indicator: Option<Span<'static>>,
+    draft_cursor: usize,
+    queued_messages: &[String],
 ) -> Option<(u16, u16)> {
+    if area.is_empty() {
+        return None;
+    }
+
+    let minimum_composer_height = COMPOSER_ROWS.min(area.height);
+    let queue_height = message_queue_desired_height(area.width, queued_messages)
+        .min(area.height.saturating_sub(minimum_composer_height));
+    if queue_height > 0 {
+        let queue_area = Rect::new(area.x, area.y, area.width, queue_height);
+        render_message_queue(queue_area, buf, queued_messages);
+    }
+
+    let area = Rect::new(
+        area.x,
+        area.y.saturating_add(queue_height),
+        area.width,
+        area.height.saturating_sub(queue_height),
+    );
     if area.is_empty() {
         return None;
     }
@@ -963,9 +1009,19 @@ fn render_composer(
     let input_y = area.y.saturating_add(COMPOSER_TOP_RULE_ROWS);
     let input_area = Rect::new(area.x, input_y, area.width, input_height);
     buf.set_style(input_area, Style::default().bg(COMPOSER_INPUT_BG));
-    let prefix_width = composer_prefix_width(activity_indicator.as_ref());
-    let lines = composer_input_lines(area.width, draft, activity_indicator);
-    let visible_start = lines.len().saturating_sub(input_height as usize);
+    let prefix_width = composer_prefix_width();
+    let lines = composer_input_lines(area.width, draft);
+    let (cursor_line_idx, cursor_width) =
+        composer_cursor_line_and_width(area.width, draft, draft_cursor, prefix_width);
+    let visible_height = usize::from(input_height);
+    let max_visible_start = lines.len().saturating_sub(visible_height);
+    let mut visible_start = max_visible_start;
+    if cursor_line_idx < visible_start {
+        visible_start = cursor_line_idx;
+    } else if cursor_line_idx >= visible_start + visible_height {
+        visible_start = cursor_line_idx + 1 - visible_height;
+    }
+    visible_start = visible_start.min(max_visible_start);
     let visible_lines = lines
         .iter()
         .skip(visible_start)
@@ -973,21 +1029,11 @@ fn render_composer(
         .collect::<Vec<_>>();
     Paragraph::new(visible_lines).render(input_area, buf);
 
-    let cursor_line_idx = if draft.is_empty() {
-        0
-    } else {
-        lines.len().saturating_sub(1)
-    };
     let cursor_y = input_area.y.saturating_add(
         cursor_line_idx
             .saturating_sub(visible_start)
             .min(input_height.saturating_sub(1) as usize) as u16,
     );
-    let cursor_width = if draft.is_empty() {
-        prefix_width
-    } else {
-        lines.last().map(line_width).unwrap_or(prefix_width)
-    };
     let cursor_x = input_area
         .x
         .saturating_add(cursor_width as u16)
@@ -995,34 +1041,54 @@ fn render_composer(
     Some((cursor_x, cursor_y))
 }
 
-fn composer_desired_height(width: u16, draft: &str, activity_visible: bool) -> u16 {
+fn composer_cursor_line_and_width(
+    width: u16,
+    draft: &str,
+    draft_cursor: usize,
+    prefix_width: usize,
+) -> (usize, usize) {
+    if draft.is_empty() {
+        return (0, prefix_width);
+    }
+
+    let mut cursor = draft_cursor.min(draft.len());
+    while !draft.is_char_boundary(cursor) {
+        cursor -= 1;
+    }
+    let mut line_count = 0usize;
+    let mut cursor_width = prefix_width;
+    for source_line in draft[..cursor].split('\n') {
+        let segments = composer_wrap_segments(width, source_line, prefix_width);
+        line_count += segments.len();
+        cursor_width = segments
+            .last()
+            .map(|segment| prefix_width + UnicodeWidthStr::width(segment.as_str()))
+            .unwrap_or(prefix_width);
+    }
+
+    (line_count.saturating_sub(1), cursor_width)
+}
+
+fn composer_desired_height(width: u16, draft: &str, queued_messages: &[String]) -> u16 {
     if width == 0 {
         return 0;
     }
 
-    let activity_width = if activity_visible { 2 } else { 0 };
-    let prefix_width = activity_width + UnicodeWidthStr::width(COMPOSER_LABEL);
+    let prefix_width = UnicodeWidthStr::width(COMPOSER_LABEL);
     let line_count =
         u16::try_from(composer_line_count(width, draft, prefix_width)).unwrap_or(u16::MAX);
-    COMPOSER_CHROME_ROWS.saturating_add(line_count)
+    message_queue_desired_height(width, queued_messages)
+        .saturating_add(COMPOSER_CHROME_ROWS)
+        .saturating_add(line_count)
 }
 
-fn composer_input_lines(
-    width: u16,
-    draft: &str,
-    activity_indicator: Option<Span<'static>>,
-) -> Vec<Line<'static>> {
+fn composer_input_lines(width: u16, draft: &str) -> Vec<Line<'static>> {
     if width == 0 {
         return Vec::new();
     }
 
-    let prefix_width = composer_prefix_width(activity_indicator.as_ref());
-    let mut prefix = Vec::new();
-    if let Some(indicator) = activity_indicator {
-        prefix.push(indicator);
-        prefix.push(" ".into());
-    }
-    prefix.push(COMPOSER_LABEL.magenta().bold());
+    let prefix_width = composer_prefix_width();
+    let prefix = vec![COMPOSER_LABEL.magenta().bold()];
 
     if draft.is_empty() {
         return composer_wrap_line(
@@ -1150,11 +1216,8 @@ fn composer_line_count(width: u16, draft: &str, prefix_width: usize) -> usize {
         .max(1)
 }
 
-fn composer_prefix_width(activity_indicator: Option<&Span<'_>>) -> usize {
-    let activity_width = activity_indicator
-        .map(|indicator| UnicodeWidthStr::width(indicator.content.as_ref()) + 1)
-        .unwrap_or_default();
-    activity_width + UnicodeWidthStr::width(COMPOSER_LABEL)
+fn composer_prefix_width() -> usize {
+    UnicodeWidthStr::width(COMPOSER_LABEL)
 }
 
 fn render_footer(area: Rect, buf: &mut Buffer, context: &RedesignChromeContext) {
@@ -1163,20 +1226,20 @@ fn render_footer(area: Rect, buf: &mut Buffer, context: &RedesignChromeContext) 
     }
 
     let line = if area.width >= 90 {
-        let hints = "  C-B side  F1 help  F2 cmds  F4 model  C-T transcript  C-C exit";
+        let hints = "  Alt-B side  Alt-H help  Alt-/ cmds  Alt-M model  C-T transcript  C-C exit";
         let workspace_width = area
             .width
             .saturating_sub(UnicodeWidthStr::width(hints) as u16);
         let workspace = compact_workspace_label(context, workspace_width);
         Line::from(vec![
             Span::from(workspace).dim(),
-            "  C-B".cyan(),
+            "  Alt-B".cyan(),
             " side".dim(),
-            "  F1".cyan(),
+            "  Alt-H".cyan(),
             " help".dim(),
-            "  F2".cyan(),
+            "  Alt-/".cyan(),
             " cmds".dim(),
-            "  F4".cyan(),
+            "  Alt-M".cyan(),
             " model".dim(),
             "  C-T".cyan(),
             " transcript".dim(),
@@ -1184,15 +1247,17 @@ fn render_footer(area: Rect, buf: &mut Buffer, context: &RedesignChromeContext) 
             " exit".dim(),
         ])
     } else if area.width >= 64 {
-        let hints = "  F1 help  C-T transcript  C-C exit";
+        let hints = "  Alt-H help  Alt-/ cmds  C-T transcript  C-C exit";
         let workspace_width = area
             .width
             .saturating_sub(UnicodeWidthStr::width(hints) as u16);
         let workspace = compact_workspace_label(context, workspace_width);
         Line::from(vec![
             Span::from(workspace).dim(),
-            "  F1".cyan(),
+            "  Alt-H".cyan(),
             " help".dim(),
+            "  Alt-/".cyan(),
+            " cmds".dim(),
             "  C-T".cyan(),
             " transcript".dim(),
             "  C-C".cyan(),
@@ -1223,44 +1288,101 @@ fn compact_workspace_label(context: &RedesignChromeContext, max_width: u16) -> S
     truncate_text(&workspace, max_width)
 }
 
-fn transcript_blocks(app: &App, width: u16) -> Vec<TranscriptBlock> {
+fn should_route_system_cells_to_rail(right_rail_width: u16, app: &App) -> bool {
+    right_rail_width > 0 && !app.redesign_final_only_transcript
+}
+
+fn active_final_transcript_input(app: &App, content_width: u16) -> Option<TranscriptBlockInput> {
+    let active = app
+        .chat_widget
+        .redesign_active_final_output_display(content_width)?;
+    let lines = display_lines_to_content(active.lines);
+    (!lines.is_empty()).then_some(TranscriptBlockInput {
+        role: TranscriptRole::Codex,
+        lines,
+        is_stream_continuation: active.is_stream_continuation,
+    })
+}
+
+fn active_system_transcript_input(app: &App, content_width: u16) -> Option<TranscriptBlockInput> {
+    let active = app
+        .chat_widget
+        .redesign_active_system_display(content_width)?;
+    let lines = display_lines_to_content(active.lines);
+    (!lines.is_empty()).then_some(TranscriptBlockInput {
+        role: TranscriptRole::System,
+        lines,
+        is_stream_continuation: active.is_stream_continuation,
+    })
+}
+
+fn transcript_input_for_cell(
+    app: &App,
+    cell: &dyn HistoryCell,
+    content_width: u16,
+    route_system_cells_to_rail: bool,
+) -> Option<TranscriptBlockInput> {
+    if is_startup_cell(cell)
+        || app.redesign_final_only_transcript && !is_final_output_cell(cell)
+        || route_system_cells_to_rail && is_system_rail_cell(cell)
+    {
+        return None;
+    }
+
+    let lines = cell_content_lines(cell, content_width);
+    (!lines.is_empty()).then_some(TranscriptBlockInput {
+        role: role_for_cell(cell),
+        lines,
+        is_stream_continuation: cell.is_stream_continuation(),
+    })
+}
+
+fn transcript_blocks(
+    app: &App,
+    width: u16,
+    route_system_cells_to_rail: bool,
+) -> Vec<TranscriptBlock> {
     let mut blocks = Vec::new();
     let content_width = width.saturating_sub(4).max(1);
     for cell in &app.transcript_cells {
         let cell = cell.as_ref();
-        if is_startup_cell(cell) || is_system_rail_cell(cell) {
-            continue;
-        }
-
-        let lines = cell_content_lines(cell, content_width);
-        if !lines.is_empty() {
+        if let Some(input) =
+            transcript_input_for_cell(app, cell, content_width, route_system_cells_to_rail)
+        {
             push_transcript_block(
                 &mut blocks,
-                role_for_cell(cell),
-                lines,
-                cell.is_stream_continuation(),
+                input.role,
+                input.lines,
+                input.is_stream_continuation,
             );
         }
     }
 
-    if let Some(active) = app
-        .chat_widget
-        .redesign_active_final_output_display(content_width)
+    if !app.redesign_final_only_transcript
+        && !route_system_cells_to_rail
+        && let Some(input) = active_system_transcript_input(app, content_width)
     {
-        let lines = display_lines_to_content(active.lines);
-        if !lines.is_empty() {
-            push_transcript_block(
-                &mut blocks,
-                TranscriptRole::Codex,
-                lines,
-                active.is_stream_continuation,
-            );
-        }
+        push_transcript_block(
+            &mut blocks,
+            input.role,
+            input.lines,
+            input.is_stream_continuation,
+        );
+    }
+
+    if let Some(input) = active_final_transcript_input(app, content_width) {
+        push_transcript_block(
+            &mut blocks,
+            input.role,
+            input.lines,
+            input.is_stream_continuation,
+        );
     }
 
     blocks
 }
 
+#[cfg(test)]
 fn system_rail_blocks(app: &App, width: u16) -> Vec<SystemRailBlock> {
     if width == 0 || app.redesign_final_only_transcript {
         return Vec::new();
@@ -1302,18 +1424,125 @@ fn system_rail_blocks(app: &App, width: u16) -> Vec<SystemRailBlock> {
 fn push_transcript_block(
     blocks: &mut Vec<TranscriptBlock>,
     role: TranscriptRole,
-    lines: Vec<Line<'static>>,
+    mut lines: Vec<Line<'static>>,
     is_stream_continuation: bool,
 ) {
+    let speaker_label = promote_speaker_prefix_to_label(role, &mut lines);
     if is_stream_continuation
         && let Some(previous) = blocks.last_mut()
         && previous.role == role
+        && (speaker_label.is_none() || previous.speaker_label == speaker_label)
     {
         previous.lines.extend(lines);
         return;
     }
 
-    blocks.push(TranscriptBlock { role, lines });
+    blocks.push(TranscriptBlock {
+        role,
+        speaker_label,
+        lines,
+    });
+}
+
+fn promote_speaker_prefix_to_label(
+    role: TranscriptRole,
+    lines: &mut Vec<Line<'static>>,
+) -> Option<String> {
+    if role != TranscriptRole::Codex {
+        return None;
+    }
+
+    let (speaker_label, bytes_to_drop) = speaker_prefix(lines.first()?)?;
+    let stripped = drop_line_prefix(lines[0].clone(), bytes_to_drop);
+    if plain_line_text(&stripped).trim().is_empty() && lines.len() > 1 {
+        lines.remove(0);
+    } else {
+        lines[0] = stripped;
+    }
+    Some(speaker_label)
+}
+
+fn speaker_prefix(line: &Line<'_>) -> Option<(String, usize)> {
+    let text = plain_line_text(line);
+    let leading_bytes = text.len().saturating_sub(text.trim_start().len());
+    let trimmed = &text[leading_bytes..];
+    let colon_idx = trimmed.find(':')?;
+    let after_colon = &trimmed[colon_idx + 1..];
+    if after_colon
+        .chars()
+        .next()
+        .is_some_and(|ch| !ch.is_whitespace())
+    {
+        return None;
+    }
+
+    let label = trimmed[..colon_idx].trim();
+    if !speaker_label_looks_like_agent(label) {
+        return None;
+    }
+
+    let mut bytes_to_drop = leading_bytes + colon_idx + 1;
+    if after_colon.starts_with(' ') {
+        bytes_to_drop += 1;
+    }
+    Some((label.to_string(), bytes_to_drop))
+}
+
+fn speaker_label_looks_like_agent(label: &str) -> bool {
+    let label = label.trim();
+    if label.is_empty() || UnicodeWidthStr::width(label) > 64 {
+        return false;
+    }
+
+    if let Some((name, role)) = label
+        .strip_suffix(')')
+        .and_then(|label| label.rsplit_once(" ("))
+    {
+        return !role.trim().is_empty() && speaker_name_looks_like_agent(name);
+    }
+
+    speaker_name_looks_like_agent(label) && !is_common_non_speaker_label(label)
+}
+
+fn speaker_name_looks_like_agent(name: &str) -> bool {
+    let words = name.split_whitespace().collect::<Vec<_>>();
+    !words.is_empty()
+        && words.len() <= 2
+        && !is_common_non_speaker_label(name)
+        && words.iter().all(|word| {
+            let mut chars = word.chars();
+            let Some(first) = chars.next() else {
+                return false;
+            };
+            first.is_uppercase()
+                && chars.all(|ch| ch.is_alphabetic() || matches!(ch, '\'' | '-' | '.'))
+        })
+}
+
+fn is_common_non_speaker_label(label: &str) -> bool {
+    const COMMON_LABELS: &[&str] = &[
+        "Action Items",
+        "Answer",
+        "Context",
+        "Error",
+        "Next Steps",
+        "Note",
+        "Notes",
+        "Plan",
+        "Question",
+        "Reasoning",
+        "Result",
+        "Results",
+        "Status",
+        "Summary",
+        "Todo",
+        "Update",
+        "Warning",
+    ];
+
+    COMMON_LABELS
+        .iter()
+        .any(|common_label| label.eq_ignore_ascii_case(common_label))
 }
 
 fn is_startup_cell(cell: &dyn HistoryCell) -> bool {
@@ -1377,17 +1606,22 @@ fn is_final_output_cell(cell: &dyn HistoryCell) -> bool {
 
 fn cell_content_lines(cell: &dyn HistoryCell, width: u16) -> Vec<Line<'static>> {
     if cell.as_any().is::<history_cell::UserHistoryCell>() {
-        display_lines_to_content(cell.raw_lines())
+        trim_empty_edge_lines(cell.raw_lines())
     } else {
         display_lines_to_content(cell.display_lines(width))
     }
 }
 
 fn display_lines_to_content(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
-    let mut out = lines
-        .into_iter()
-        .map(strip_legacy_prefix)
-        .collect::<Vec<_>>();
+    trim_empty_edge_lines(
+        lines
+            .into_iter()
+            .map(strip_legacy_prefix)
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn trim_empty_edge_lines(mut out: Vec<Line<'static>>) -> Vec<Line<'static>> {
     while out
         .first()
         .is_some_and(|line| plain_line_text(line).trim().is_empty())
@@ -1446,12 +1680,26 @@ fn drop_line_prefix(line: Line<'static>, mut bytes_to_drop: usize) -> Line<'stat
     Line::from(spans).style(line.style)
 }
 
+#[cfg(test)]
 fn bubble_lines(block: &TranscriptBlock, area_width: u16) -> Vec<Line<'static>> {
+    bubble_lines_with_assistant_label(block, area_width, "Codex")
+}
+
+fn bubble_lines_with_assistant_label(
+    block: &TranscriptBlock,
+    area_width: u16,
+    assistant_label: &str,
+) -> Vec<Line<'static>> {
+    let assistant_label = block.speaker_label.as_deref().unwrap_or(assistant_label);
     let viewport_width = area_width.saturating_sub(2).max(1) as usize;
     let max_bubble_width = bubble_max_width(block.role, viewport_width);
     let wrap_width = max_bubble_width.saturating_sub(4).max(1);
     let mut wrapped = Vec::new();
     let content_lines = reflow_bubble_prose_lines(&block.lines);
+    let role_label = truncate_text(
+        role_name(block.role, assistant_label),
+        wrap_width.min(u16::MAX as usize) as u16,
+    );
 
     for line in &content_lines {
         if plain_line_text(line).trim().is_empty() {
@@ -1481,11 +1729,11 @@ fn bubble_lines(block: &TranscriptBlock, area_width: u16) -> Vec<Line<'static>> 
         .map(line_width)
         .max()
         .unwrap_or(1)
-        .max(role_name(block.role).len())
+        .max(UnicodeWidthStr::width(role_label.as_str()))
         .min(wrap_width);
     let bubble_width = inner_width + 4;
     let prefix_width = bubble_prefix_width(block.role, viewport_width, bubble_width);
-    let label_width = UnicodeWidthStr::width(role_name(block.role));
+    let label_width = UnicodeWidthStr::width(role_label.as_str());
     let label_prefix_width = match bubble_align(block.role) {
         BubbleAlign::Left => prefix_width,
         BubbleAlign::Right => prefix_width + bubble_width.saturating_sub(label_width),
@@ -1497,7 +1745,7 @@ fn bubble_lines(block: &TranscriptBlock, area_width: u16) -> Vec<Line<'static>> 
     let mut lines = vec![
         Line::from(vec![
             Span::from(" ".repeat(label_prefix_width)),
-            role_label_span(block.role),
+            role_label_span(block.role, role_label),
         ]),
         Line::from(vec![
             Span::from(" ".repeat(prefix_width)),
@@ -1525,12 +1773,26 @@ fn bubble_lines(block: &TranscriptBlock, area_width: u16) -> Vec<Line<'static>> 
     lines
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReflowRunKind {
+    Prose,
+    ListItem,
+}
+
 fn reflow_bubble_prose_lines(lines: &[Line<'static>]) -> Vec<Line<'static>> {
     let mut out = Vec::new();
-    let mut prose_run: Option<Line<'static>> = None;
+    let mut prose_run: Option<(ReflowRunKind, Line<'static>)> = None;
 
     for line in lines {
-        if let Some(run) = prose_run.as_mut()
+        if starts_bubble_list_run(line) {
+            if let Some((_, run)) = prose_run.take() {
+                out.push(run);
+            }
+            prose_run = Some((ReflowRunKind::ListItem, line.clone()));
+            continue;
+        }
+
+        if let Some((ReflowRunKind::ListItem, run)) = prose_run.as_mut()
             && is_list_continuation_line(line)
         {
             run.spans.push(" ".into());
@@ -1540,25 +1802,29 @@ fn reflow_bubble_prose_lines(lines: &[Line<'static>]) -> Vec<Line<'static>> {
         }
 
         let is_plain_prose = is_plain_prose_line(line);
-        if starts_bubble_list_run(line)
-            || (is_plain_prose && (prose_run.is_some() || starts_bubble_prose_run(line)))
-        {
-            if let Some(run) = prose_run.as_mut() {
+        if is_plain_prose {
+            if let Some((ReflowRunKind::Prose, run)) = prose_run.as_mut() {
                 run.spans.push(" ".into());
                 run.spans.extend(line.spans.clone());
-            } else {
-                prose_run = Some(line.clone());
+                continue;
             }
-            continue;
+
+            if let Some((_, run)) = prose_run.take() {
+                out.push(run);
+            }
+            if starts_bubble_prose_run(line) {
+                prose_run = Some((ReflowRunKind::Prose, line.clone()));
+                continue;
+            }
         }
 
-        if let Some(run) = prose_run.take() {
+        if let Some((_, run)) = prose_run.take() {
             out.push(run);
         }
         out.push(line.clone());
     }
 
-    if let Some(run) = prose_run {
+    if let Some((_, run)) = prose_run {
         out.push(run);
     }
 
@@ -1661,19 +1927,20 @@ fn bubble_align(role: TranscriptRole) -> BubbleAlign {
     }
 }
 
-fn role_name(role: TranscriptRole) -> &'static str {
+fn role_name(role: TranscriptRole, assistant_label: &str) -> &str {
     match role {
         TranscriptRole::User => "You",
-        TranscriptRole::Codex => "Codex",
+        TranscriptRole::Codex => assistant_label,
         TranscriptRole::System => "System",
     }
 }
 
-fn role_label_span(role: TranscriptRole) -> Span<'static> {
+fn role_label_span(role: TranscriptRole, label: String) -> Span<'static> {
+    let label = Span::from(label);
     match role {
-        TranscriptRole::User => role_name(role).cyan().bold(),
-        TranscriptRole::Codex => role_name(role).magenta().bold(),
-        TranscriptRole::System => role_name(role).dim().bold(),
+        TranscriptRole::User => label.cyan().bold(),
+        TranscriptRole::Codex => label.magenta().bold(),
+        TranscriptRole::System => label.dim().bold(),
     }
 }
 
@@ -1707,35 +1974,6 @@ fn draw_horizontal_rule(area: Rect, buf: &mut Buffer, y: u16) {
     }
     for x in area.x..area.right() {
         buf[(x, y)].set_symbol("-").set_style(Style::new().dim());
-    }
-}
-
-fn side_width(width: u16) -> u16 {
-    if width >= MIN_WIDE_WIDTH {
-        WIDE_SIDE_WIDTH
-    } else {
-        0
-    }
-}
-
-fn right_rail_width(width: u16, side_width: u16) -> u16 {
-    let center_width = width.saturating_sub(side_width + RIGHT_RAIL_WIDTH);
-    if width >= MIN_RIGHT_RAIL_WIDTH && center_width >= 64 {
-        RIGHT_RAIL_WIDTH
-    } else {
-        0
-    }
-}
-
-fn side_width_for_state(width: u16, sidebar: RedesignSidebarState) -> u16 {
-    let default_width = side_width(width);
-    if default_width > 0 {
-        return default_width;
-    }
-    if sidebar.focused() && width >= MIN_COMPACT_SIDEBAR_WIDTH {
-        COMPACT_SIDE_WIDTH
-    } else {
-        0
     }
 }
 
@@ -1823,6 +2061,26 @@ mod tests {
     use insta::assert_snapshot;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
+    #[derive(Debug)]
+    struct CountingHistoryCell {
+        text: String,
+        display_calls: Arc<AtomicUsize>,
+    }
+
+    impl HistoryCell for CountingHistoryCell {
+        fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+            self.display_calls.fetch_add(1, Ordering::Relaxed);
+            vec![Line::from(self.text.clone())]
+        }
+
+        fn raw_lines(&self) -> Vec<Line<'static>> {
+            vec![Line::from(self.text.clone())]
+        }
+    }
 
     fn render_fixture(width: u16, height: u16) -> String {
         render_fixture_with_sidebar(width, height, RedesignSidebarState::default())
@@ -1846,6 +2104,7 @@ mod tests {
                 let blocks = vec![
                     TranscriptBlock {
                         role: TranscriptRole::User,
+                        speaker_label: None,
                         lines: vec![Line::from(
                             "Let's redesign the TUI to be more intuitive for CLI users."
                                 .to_string(),
@@ -1853,6 +2112,7 @@ mod tests {
                     },
                     TranscriptBlock {
                         role: TranscriptRole::Codex,
+                        speaker_label: None,
                         lines: vec![Line::from(
                             "Agreed. I'll focus on information density and clear keyboard shortcuts."
                                 .to_string(),
@@ -1883,7 +2143,8 @@ mod tests {
                     layout.composer,
                     frame.buffer_mut(),
                     "",
-                    composer_activity_indicator(&context),
+                    /*draft_cursor*/ 0,
+                    &[],
                 );
             })
             .expect("draw");
@@ -1894,6 +2155,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(40, 6)).expect("terminal");
         let blocks = vec![TranscriptBlock {
             role: TranscriptRole::Codex,
+            speaker_label: None,
             lines: (0..12)
                 .map(|idx| Line::from(format!("line {idx}")))
                 .collect(),
@@ -1908,6 +2170,15 @@ mod tests {
     }
 
     fn render_composer_fixture(width: u16, height: u16, draft: &str) -> String {
+        render_composer_fixture_with_queue(width, height, draft, &[])
+    }
+
+    fn render_composer_fixture_with_queue(
+        width: u16,
+        height: u16,
+        draft: &str,
+        queued_messages: &[String],
+    ) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
         terminal
             .draw(|frame| {
@@ -1917,26 +2188,27 @@ mod tests {
                     area,
                     frame.buffer_mut(),
                     draft,
-                    /*activity_indicator*/ None,
+                    draft.len(),
+                    queued_messages,
                 );
             })
             .expect("draw");
         terminal.backend().to_string()
     }
 
-    fn render_composer_cursor(width: u16, height: u16, draft: &str) -> (u16, u16) {
+    fn render_composer_cursor(
+        width: u16,
+        height: u16,
+        draft: &str,
+        draft_cursor: usize,
+    ) -> (u16, u16) {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
         let mut cursor = None;
         terminal
             .draw(|frame| {
                 let area = frame.area();
                 render_background(area, frame.buffer_mut());
-                cursor = render_composer(
-                    area,
-                    frame.buffer_mut(),
-                    draft,
-                    /*activity_indicator*/ None,
-                );
+                cursor = render_composer(area, frame.buffer_mut(), draft, draft_cursor, &[]);
             })
             .expect("draw");
         cursor.expect("cursor")
@@ -1979,17 +2251,58 @@ mod tests {
             "redesign_chrome_wrapped_composer_44x4",
             render_composer_fixture(
                 /*width*/ 44,
-                composer_desired_height(/*width*/ 44, draft, /*activity_visible*/ false),
+                composer_desired_height(/*width*/ 44, draft, &[]),
                 draft,
             )
         );
     }
 
     #[test]
+    fn queued_messages_render_above_message_bar_snapshot() {
+        let queued_messages = vec![
+            "Queued follow-up question".to_string(),
+            "Please also check the terminal resize case.".to_string(),
+        ];
+        assert_snapshot!(
+            "redesign_chrome_queued_messages_52x7",
+            render_composer_fixture_with_queue(
+                /*width*/ 52,
+                composer_desired_height(/*width*/ 52, "", &queued_messages),
+                "",
+                &queued_messages,
+            )
+        );
+    }
+
+    #[test]
+    fn layout_keeps_composer_anchored_above_footer_across_resize_classes() {
+        for (width, height) in [(44, 4), (72, 18), (100, 24), (132, 24)] {
+            let layout = layout_for_dimensions(Rect::new(0, 0, width, height), COMPOSER_ROWS);
+
+            assert_eq!(
+                layout.footer.bottom(),
+                height,
+                "footer should stay anchored at terminal bottom for {width}x{height}"
+            );
+            assert_eq!(
+                layout.composer.bottom(),
+                layout.footer.y,
+                "composer should stay directly above footer for {width}x{height}"
+            );
+            if height >= 18 {
+                assert!(
+                    layout.composer.height > 0,
+                    "composer should remain visible for {width}x{height}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn composer_height_grows_for_wrapped_draft() {
         let draft = "Please review the recently modified rendering code before shipping.";
 
-        assert!(composer_desired_height(/*width*/ 32, draft, /*activity_visible*/ false) > 3);
+        assert!(composer_desired_height(/*width*/ 32, draft, &[]) > 3);
     }
 
     #[test]
@@ -2000,12 +2313,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 render_background(area, frame.buffer_mut());
-                render_composer(
-                    area,
-                    frame.buffer_mut(),
-                    "draft",
-                    /*activity_indicator*/ None,
-                );
+                render_composer(area, frame.buffer_mut(), "draft", "draft".len(), &[]);
             })
             .expect("draw");
 
@@ -2016,12 +2324,57 @@ mod tests {
         assert_eq!(buffer[(0, 3)].bg, Color::Black);
     }
 
+    #[tokio::test]
+    async fn slash_fallback_replaces_redesign_composer_chrome() {
+        let mut app = crate::app::test_support::make_test_app().await;
+        app.redesign_chrome_enabled = true;
+        app.chat_widget.insert_str("/");
+
+        let mut terminal =
+            Terminal::new(TestBackend::new(/*width*/ 100, /*height*/ 24)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                render_app(area, frame.buffer_mut(), &app);
+            })
+            .expect("draw");
+        let rendered = terminal.backend().to_string();
+
+        assert!(app.chat_widget.redesign_should_render_bottom_pane());
+        assert!(!rendered.contains("Describe the next change..."));
+        assert!(rendered.contains("/"));
+    }
+
     #[test]
     fn composer_cursor_advances_for_trailing_space() {
-        let before = render_composer_cursor(/*width*/ 24, /*height*/ 3, "hello");
-        let after = render_composer_cursor(/*width*/ 24, /*height*/ 3, "hello ");
+        let before =
+            render_composer_cursor(/*width*/ 24, /*height*/ 3, "hello", "hello".len());
+        let after = render_composer_cursor(
+            /*width*/ 24,
+            /*height*/ 3,
+            "hello ",
+            "hello ".len(),
+        );
 
         assert_eq!(after, (before.0 + 1, before.1));
+    }
+
+    #[test]
+    fn composer_cursor_uses_draft_cursor_offset() {
+        let start = render_composer_cursor(
+            /*width*/ 24,
+            /*height*/ 3,
+            "hello world",
+            /*draft_cursor*/ 0,
+        );
+        let middle = render_composer_cursor(
+            /*width*/ 24,
+            /*height*/ 3,
+            "hello world",
+            "hello".len(),
+        );
+
+        assert_eq!(middle, (start.0 + 5, start.1));
     }
 
     #[test]
@@ -2039,6 +2392,7 @@ mod tests {
     fn bubble_lines_render_visible_frame() {
         let block = TranscriptBlock {
             role: TranscriptRole::Codex,
+            speaker_label: None,
             lines: vec![Line::from("Bubble this message.")],
         };
 
@@ -2059,9 +2413,51 @@ mod tests {
     }
 
     #[test]
+    fn bubble_lines_uses_named_agent_label() {
+        let block = TranscriptBlock {
+            role: TranscriptRole::Codex,
+            speaker_label: None,
+            lines: vec![Line::from("I found the issue.")],
+        };
+
+        let lines =
+            bubble_lines_with_assistant_label(&block, /*area_width*/ 80, "Robie [explorer]")
+                .iter()
+                .map(plain_line_text)
+                .collect::<Vec<_>>();
+
+        assert_eq!(lines[0], " Robie [explorer]");
+        assert!(
+            lines.iter().all(|line| !line.contains("Codex")),
+            "named agent transcript should not render the default Codex label: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn bubble_lines_uses_message_speaker_label_over_thread_label() {
+        let block = TranscriptBlock {
+            role: TranscriptRole::Codex,
+            speaker_label: Some("Riley (Domain Expert)".to_string()),
+            lines: vec![Line::from("Doing well, Shaun.")],
+        };
+
+        let lines = bubble_lines_with_assistant_label(&block, /*area_width*/ 80, "Codex")
+            .iter()
+            .map(plain_line_text)
+            .collect::<Vec<_>>();
+
+        assert_eq!(lines[0], " Riley (Domain Expert)");
+        assert!(
+            lines.iter().all(|line| !line.contains("Codex")),
+            "message speaker label should override the default assistant label: {lines:?}"
+        );
+    }
+
+    #[test]
     fn bubble_lines_reflow_prewrapped_prose() {
         let block = TranscriptBlock {
             role: TranscriptRole::Codex,
+            speaker_label: None,
             lines: vec![
                 Line::from("It supports interactive"),
                 Line::from("terminal"),
@@ -2085,6 +2481,7 @@ mod tests {
     fn bubble_lines_reflow_prewrapped_ordered_list() {
         let block = TranscriptBlock {
             role: TranscriptRole::Codex,
+            speaker_label: None,
             lines: vec![
                 Line::from("2. Core agent logic lives in"),
                 Line::from("   crates"),
@@ -2105,6 +2502,65 @@ mod tests {
                 .any(|line| line.contains("crates like codex-core")),
             "expected ordered-list continuations to reflow into fuller bubble lines, got: {lines:?}"
         );
+    }
+
+    #[test]
+    fn bubble_lines_keeps_adjacent_list_items_distinct() {
+        let block = TranscriptBlock {
+            role: TranscriptRole::Codex,
+            speaker_label: None,
+            lines: vec![
+                Line::from("- First rendered item"),
+                Line::from("- Second rendered item"),
+            ],
+        };
+
+        let lines = bubble_lines(&block, /*area_width*/ 44)
+            .iter()
+            .map(plain_line_text)
+            .collect::<Vec<_>>();
+        let rendered = lines.join("\n");
+
+        assert!(rendered.contains("- First rendered item"));
+        assert!(rendered.contains("- Second rendered item"));
+        assert!(
+            !rendered.contains("First rendered item - Second rendered item"),
+            "adjacent list items should not be reflowed into one paragraph: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn transcript_render_keeps_markdown_list_items_snapshot() {
+        let mut terminal =
+            Terminal::new(TestBackend::new(/*width*/ 72, /*height*/ 14)).expect("terminal");
+        let blocks = vec![TranscriptBlock {
+            role: TranscriptRole::Codex,
+            speaker_label: None,
+            lines: vec![
+                Line::from("What changed:"),
+                Line::from(""),
+                Line::from("- Added /persistent-skill command support."),
+                Line::from("- Added persistent skill resolution/status/clear logic."),
+                Line::from("- Wired user turns to inject once, then keep compact instructions."),
+                Line::from(""),
+                Line::from("TAIL_SENTINEL"),
+            ],
+        }];
+
+        terminal
+            .draw(|frame| {
+                render_transcript(
+                    frame.area(),
+                    frame.buffer_mut(),
+                    &blocks,
+                    /*scroll_offset*/ 0,
+                );
+            })
+            .expect("draw");
+        let rendered = terminal.backend().to_string();
+
+        assert!(rendered.contains("TAIL_SENTINEL"));
+        assert_snapshot!("redesign_chrome_markdown_list_items", rendered);
     }
 
     #[test]
@@ -2134,10 +2590,10 @@ mod tests {
     }
 
     #[test]
-    fn composer_activity_indicator_only_renders_while_working() {
+    fn work_activity_indicator_only_renders_while_working() {
         let mut context = RedesignChromeContext::fixture();
         assert_eq!(
-            composer_activity_indicator(&context)
+            work_activity_indicator(&context)
                 .expect("working indicator")
                 .content
                 .as_ref(),
@@ -2146,7 +2602,7 @@ mod tests {
 
         context.working = false;
 
-        assert_eq!(composer_activity_indicator(&context), None);
+        assert_eq!(work_activity_indicator(&context), None);
     }
 
     #[test]
@@ -2154,6 +2610,68 @@ mod tests {
         assert_eq!(content_width_for_terminal_width(100), 76);
         assert_eq!(content_width_for_terminal_width(132), 78);
         assert_eq!(content_width_for_terminal_width(72), 72);
+    }
+
+    #[tokio::test]
+    async fn render_app_formats_only_visible_transcript_tail() {
+        let mut app = crate::app::test_support::make_test_app().await;
+        app.redesign_chrome_enabled = true;
+        let display_calls = Arc::new(AtomicUsize::new(0));
+        app.transcript_cells = (0..1_000)
+            .map(|idx| {
+                Arc::new(CountingHistoryCell {
+                    text: format!("message {idx}"),
+                    display_calls: display_calls.clone(),
+                }) as Arc<dyn HistoryCell>
+            })
+            .collect();
+
+        let mut terminal =
+            Terminal::new(TestBackend::new(/*width*/ 100, /*height*/ 24)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                render_app(frame.area(), frame.buffer_mut(), &app);
+            })
+            .expect("draw");
+        let rendered = terminal.backend().to_string();
+
+        assert!(rendered.contains("message 999"));
+        assert!(!rendered.contains("message 0"));
+        assert!(
+            display_calls.load(Ordering::Relaxed) < 100,
+            "tail render should not format the full transcript"
+        );
+    }
+
+    #[tokio::test]
+    async fn render_app_formats_only_visible_system_rail_tail() {
+        let mut app = crate::app::test_support::make_test_app().await;
+        app.redesign_chrome_enabled = true;
+        let display_calls = Arc::new(AtomicUsize::new(0));
+        app.transcript_cells = (0..1_000)
+            .map(|idx| {
+                Arc::new(CountingHistoryCell {
+                    text: format!("rail {idx}"),
+                    display_calls: display_calls.clone(),
+                }) as Arc<dyn HistoryCell>
+            })
+            .collect();
+
+        let mut terminal =
+            Terminal::new(TestBackend::new(/*width*/ 132, /*height*/ 24)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                render_app(frame.area(), frame.buffer_mut(), &app);
+            })
+            .expect("draw");
+        let rendered = terminal.backend().to_string();
+
+        assert!(rendered.contains("rail 999"));
+        assert!(!rendered.contains("rail 0"));
+        assert!(
+            display_calls.load(Ordering::Relaxed) < 100,
+            "tail render should not format the full system rail"
+        );
     }
 
     #[tokio::test]
@@ -2196,7 +2714,9 @@ mod tests {
             )),
         ];
 
-        let blocks = transcript_blocks(&app, /*width*/ 80);
+        let blocks = transcript_blocks(
+            &app, /*width*/ 80, /*route_system_cells_to_rail*/ true,
+        );
         let rail = system_rail_blocks(&app, /*width*/ 30);
         let rail_summary = rail
             .iter()
@@ -2218,10 +2738,12 @@ mod tests {
             vec![
                 TranscriptBlock {
                     role: TranscriptRole::User,
+                    speaker_label: None,
                     lines: vec![Line::from("Run the tests")],
                 },
                 TranscriptBlock {
                     role: TranscriptRole::Codex,
+                    speaker_label: None,
                     lines: vec![Line::from("Tests passed")],
                 },
             ]
@@ -2231,6 +2753,59 @@ mod tests {
             vec![
                 ("THINKING", "checking the changed crates".to_string()),
                 ("SYSTEM", "system notice".to_string()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn transcript_inlines_system_cells_when_right_rail_is_hidden() {
+        let mut app = crate::app::test_support::make_test_app().await;
+        let cwd = app.config.cwd.clone();
+        app.transcript_cells = vec![
+            std::sync::Arc::new(history_cell::new_user_prompt(
+                "Run the tests".to_string(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            )),
+            std::sync::Arc::new(history_cell::ReasoningSummaryCell::new(
+                "thinking".to_string(),
+                "checking the changed crates".to_string(),
+                cwd.as_path(),
+                /*transcript_only*/ false,
+            )),
+            std::sync::Arc::new(history_cell::PlainHistoryCell::new(vec![
+                "system notice".into(),
+            ])),
+            std::sync::Arc::new(history_cell::AgentMarkdownCell::new(
+                "Tests passed".to_string(),
+                cwd.as_path(),
+            )),
+        ];
+
+        let blocks = transcript_blocks(
+            &app, /*width*/ 80, /*route_system_cells_to_rail*/ false,
+        );
+        let summary = blocks
+            .iter()
+            .map(|block| {
+                (
+                    block.role,
+                    block.lines.iter().map(plain_line_text).collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            summary,
+            vec![
+                (TranscriptRole::User, vec!["Run the tests".to_string()]),
+                (
+                    TranscriptRole::Codex,
+                    vec!["checking the changed crates".to_string()]
+                ),
+                (TranscriptRole::System, vec!["system notice".to_string()]),
+                (TranscriptRole::Codex, vec!["Tests passed".to_string()]),
             ]
         );
     }
@@ -2262,7 +2837,9 @@ mod tests {
             )),
         ];
 
-        let blocks = transcript_blocks(&app, /*width*/ 80);
+        let blocks = transcript_blocks(
+            &app, /*width*/ 80, /*route_system_cells_to_rail*/ false,
+        );
         let rail = system_rail_blocks(&app, /*width*/ 30);
 
         assert_eq!(
@@ -2270,15 +2847,41 @@ mod tests {
             vec![
                 TranscriptBlock {
                     role: TranscriptRole::User,
+                    speaker_label: None,
                     lines: vec![Line::from("Run the tests")],
                 },
                 TranscriptBlock {
                     role: TranscriptRole::Codex,
+                    speaker_label: None,
                     lines: vec![Line::from("Tests passed")],
                 },
             ]
         );
         assert_eq!(rail, Vec::<SystemRailBlock>::new());
+    }
+
+    #[tokio::test]
+    async fn transcript_blocks_preserve_user_indentation() {
+        let mut app = crate::app::test_support::make_test_app().await;
+        app.transcript_cells = vec![std::sync::Arc::new(history_cell::new_user_prompt(
+            "Please keep:\n  indented line".to_string(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ))];
+
+        let blocks = transcript_blocks(
+            &app, /*width*/ 80, /*route_system_cells_to_rail*/ true,
+        );
+
+        assert_eq!(
+            blocks,
+            vec![TranscriptBlock {
+                role: TranscriptRole::User,
+                speaker_label: None,
+                lines: vec![Line::from("Please keep:"), Line::from("  indented line")],
+            }]
+        );
     }
 
     #[tokio::test]
@@ -2295,13 +2898,40 @@ mod tests {
             )),
         ];
 
-        let blocks = transcript_blocks(&app, /*width*/ 80);
+        let blocks = transcript_blocks(
+            &app, /*width*/ 80, /*route_system_cells_to_rail*/ true,
+        );
 
         assert_eq!(
             blocks,
             vec![TranscriptBlock {
                 role: TranscriptRole::Codex,
+                speaker_label: None,
                 lines: vec![Line::from("First line"), Line::from("second line")],
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn transcript_blocks_promote_agent_prefix_to_speaker_label() {
+        let mut app = crate::app::test_support::make_test_app().await;
+        app.transcript_cells = vec![std::sync::Arc::new(history_cell::AgentMessageCell::new(
+            vec![Line::from(
+                "Riley (Domain Expert): Doing well, Shaun. I am ready.",
+            )],
+            /*is_first_line*/ true,
+        ))];
+
+        let blocks = transcript_blocks(
+            &app, /*width*/ 80, /*route_system_cells_to_rail*/ true,
+        );
+
+        assert_eq!(
+            blocks,
+            vec![TranscriptBlock {
+                role: TranscriptRole::Codex,
+                speaker_label: Some("Riley (Domain Expert)".to_string()),
+                lines: vec![Line::from("Doing well, Shaun. I am ready.")],
             }]
         );
     }
@@ -2314,7 +2944,9 @@ mod tests {
             /*is_first_line*/ true,
         ))];
 
-        let blocks = transcript_blocks(&app, /*width*/ 80);
+        let blocks = transcript_blocks(
+            &app, /*width*/ 80, /*route_system_cells_to_rail*/ true,
+        );
         let first_span = &blocks[0].lines[0].spans[0];
 
         assert_eq!(first_span.content.as_ref(), "Important");

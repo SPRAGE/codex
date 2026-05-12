@@ -345,6 +345,8 @@ mod plugins;
 use self::plugins::PluginsCacheState;
 mod plan_implementation;
 use self::plan_implementation::PLAN_IMPLEMENTATION_TITLE;
+mod persistent_skill;
+use self::persistent_skill::PersistentSkillSelection;
 mod protocol;
 mod realtime;
 use self::realtime::RealtimeConversationUiState;
@@ -706,6 +708,8 @@ pub(crate) struct ChatWidget {
     suppressed_exec_calls: HashSet<String>,
     skills_all: Vec<ProtocolSkillMetadata>,
     skills_initial_state: Option<HashMap<AbsolutePathBuf, bool>>,
+    persistent_skill: Option<PersistentSkillSelection>,
+    persistent_skill_pending_injection: bool,
     last_unified_wait: Option<UnifiedExecWaitState>,
     unified_exec_wait_streak: Option<UnifiedExecWaitStreak>,
     turn_lifecycle: TurnLifecycleState,
@@ -983,6 +987,8 @@ pub(crate) struct ThreadInputState {
     user_turn_pending_start: bool,
     current_collaboration_mode: CollaborationMode,
     active_collaboration_mask: Option<CollaborationModeMask>,
+    persistent_skill: Option<PersistentSkillSelection>,
+    persistent_skill_pending_injection: bool,
     task_running: bool,
     agent_turn_running: bool,
 }
@@ -3144,6 +3150,8 @@ impl ChatWidget {
             user_turn_pending_start: self.input_queue.user_turn_pending_start,
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
+            persistent_skill: self.persistent_skill.clone(),
+            persistent_skill_pending_injection: self.persistent_skill_pending_injection,
             task_running: self.bottom_pane.is_task_running(),
             agent_turn_running: self.turn_lifecycle.agent_turn_running,
         })
@@ -3154,6 +3162,9 @@ impl ChatWidget {
         if let Some(input_state) = input_state {
             self.current_collaboration_mode = input_state.current_collaboration_mode;
             self.active_collaboration_mask = input_state.active_collaboration_mask;
+            self.persistent_skill = input_state.persistent_skill;
+            self.persistent_skill_pending_injection =
+                input_state.persistent_skill_pending_injection;
             self.turn_lifecycle
                 .restore_running(input_state.agent_turn_running, Instant::now());
             self.input_queue.user_turn_pending_start = input_state.user_turn_pending_start;
@@ -3221,6 +3232,8 @@ impl ChatWidget {
                 UserMessageHistoryRecord::UserMessageText,
             );
         } else {
+            self.persistent_skill = None;
+            self.persistent_skill_pending_injection = false;
             self.turn_lifecycle
                 .restore_running(/*running*/ false, Instant::now());
             self.input_queue.clear();
@@ -4774,6 +4787,8 @@ impl ChatWidget {
             effective_service_tier,
             skills_all: Vec::new(),
             skills_initial_state: None,
+            persistent_skill: None,
+            persistent_skill_pending_injection: false,
             current_collaboration_mode,
             active_collaboration_mask,
             has_chatgpt_account,
@@ -5645,6 +5660,9 @@ impl ChatWidget {
             }
         }
 
+        let persistent_skill_injected =
+            self.ensure_persistent_skill_item(&mut items, &mut selected_skill_paths);
+
         if let Some(plugins) = self.plugins_for_mentions() {
             for binding in &mention_bindings {
                 let Some(plugin_config_name) = binding
@@ -5724,13 +5742,7 @@ impl ChatWidget {
 
         self.maybe_apply_ide_context(&mut items);
 
-        let collaboration_mode = if self.collaboration_modes_enabled() {
-            self.active_collaboration_mask
-                .as_ref()
-                .map(|_| effective_mode.clone())
-        } else {
-            None
-        };
+        let collaboration_mode = self.collaboration_mode_with_persistent_skill(&effective_mode);
         let pending_steer = (!render_in_history).then(|| PendingSteer {
             user_message: UserMessage {
                 text: text.clone(),
@@ -5769,6 +5781,9 @@ impl ChatWidget {
 
         if !self.submit_op(op.clone()) {
             return (false, None);
+        }
+        if persistent_skill_injected {
+            self.mark_persistent_skill_injected();
         }
         if render_in_history {
             self.input_queue.user_turn_pending_start = true;
@@ -10456,6 +10471,19 @@ impl ChatWidget {
 
     pub(crate) fn redesign_composer_text(&self) -> String {
         self.bottom_pane.composer_text_with_pending()
+    }
+
+    pub(crate) fn redesign_composer_cursor(&self) -> usize {
+        self.bottom_pane.composer_cursor()
+    }
+
+    pub(crate) fn redesign_queued_message_texts(&self) -> Vec<String> {
+        let preview = self.input_queue.preview();
+        preview
+            .rejected_steers
+            .into_iter()
+            .chain(preview.queued_messages)
+            .collect()
     }
 
     pub(crate) fn redesign_should_render_bottom_pane(&self) -> bool {

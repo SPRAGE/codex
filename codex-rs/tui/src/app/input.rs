@@ -372,7 +372,31 @@ impl App {
             return action;
         }
 
+        let composer_empty = self.chat_widget.composer_text_with_pending().is_empty();
         match key_event {
+            _ if redesign_help_key_matches(key_event) => {
+                self.redesign_sidebar_state.blur();
+                self.chat_widget.open_keymap_picker();
+                RedesignShortcutAction::Redraw
+            }
+            _ if composer_empty && redesign_commands_key_matches(key_event) => {
+                self.redesign_sidebar_state.blur();
+                self.chat_widget.insert_str("/");
+                RedesignShortcutAction::Redraw
+            }
+            _ if redesign_model_key_matches(key_event, composer_empty) => {
+                self.redesign_sidebar_state.blur();
+                self.chat_widget.open_model_popup();
+                RedesignShortcutAction::Redraw
+            }
+            _ if composer_empty && redesign_new_chat_key_matches(key_event) => {
+                self.redesign_sidebar_state.blur();
+                RedesignShortcutAction::StartNewChat
+            }
+            _ if composer_empty && redesign_final_only_key_matches(key_event) => {
+                self.redesign_final_only_transcript = !self.redesign_final_only_transcript;
+                RedesignShortcutAction::Redraw
+            }
             KeyEvent {
                 code: KeyCode::Char('?'),
                 modifiers,
@@ -382,39 +406,12 @@ impl App {
                 RedesignShortcutAction::Redraw
             }
             KeyEvent {
-                code: KeyCode::F(1),
-                kind: KeyEventKind::Press,
-                ..
-            } => {
-                self.redesign_sidebar_state.blur();
-                self.chat_widget.open_keymap_picker();
-                RedesignShortcutAction::Redraw
-            }
-            KeyEvent {
-                code: KeyCode::F(2),
-                kind: KeyEventKind::Press,
-                ..
-            } if self.chat_widget.composer_text_with_pending().is_empty() => {
-                self.redesign_sidebar_state.blur();
-                self.chat_widget.insert_str("/");
-                RedesignShortcutAction::Redraw
-            }
-            KeyEvent {
                 code: KeyCode::F(3),
                 kind: KeyEventKind::Press,
                 ..
             } if self.chat_widget.can_run_ctrl_l_clear_now() => {
                 self.redesign_sidebar_state.blur();
                 RedesignShortcutAction::ClearTerminal
-            }
-            KeyEvent {
-                code: KeyCode::F(4),
-                kind: KeyEventKind::Press,
-                ..
-            } => {
-                self.redesign_sidebar_state.blur();
-                self.chat_widget.open_model_popup();
-                RedesignShortcutAction::Redraw
             }
             _ => RedesignShortcutAction::None,
         }
@@ -607,8 +604,44 @@ impl App {
 
 fn redesign_sidebar_toggle_key_matches(key_event: KeyEvent) -> bool {
     matches!(key_event.code, KeyCode::Char('b' | 'B'))
-        && key_event.modifiers.contains(KeyModifiers::CONTROL)
-        && !key_event.modifiers.contains(KeyModifiers::ALT)
+        && (key_event.modifiers.contains(KeyModifiers::CONTROL)
+            || key_event.modifiers.contains(KeyModifiers::ALT))
+        && !(key_event.modifiers.contains(KeyModifiers::CONTROL)
+            && key_event.modifiers.contains(KeyModifiers::ALT))
+}
+
+fn redesign_help_key_matches(key_event: KeyEvent) -> bool {
+    matches!(key_event.code, KeyCode::F(1))
+        || matches!(key_event.code, KeyCode::Char('h' | 'H'))
+            && key_event.modifiers.contains(KeyModifiers::ALT)
+            && !key_event.modifiers.contains(KeyModifiers::CONTROL)
+}
+
+fn redesign_commands_key_matches(key_event: KeyEvent) -> bool {
+    matches!(key_event.code, KeyCode::F(2))
+        || matches!(key_event.code, KeyCode::Char('/'))
+            && key_event.modifiers.contains(KeyModifiers::ALT)
+            && !key_event.modifiers.contains(KeyModifiers::CONTROL)
+}
+
+fn redesign_model_key_matches(key_event: KeyEvent, composer_empty: bool) -> bool {
+    matches!(key_event.code, KeyCode::F(4))
+        || composer_empty
+            && matches!(key_event.code, KeyCode::Char('m' | 'M'))
+            && key_event.modifiers.contains(KeyModifiers::ALT)
+            && !key_event.modifiers.contains(KeyModifiers::CONTROL)
+}
+
+fn redesign_new_chat_key_matches(key_event: KeyEvent) -> bool {
+    matches!(key_event.code, KeyCode::Char('n' | 'N'))
+        && key_event.modifiers.contains(KeyModifiers::ALT)
+        && !key_event.modifiers.contains(KeyModifiers::CONTROL)
+}
+
+fn redesign_final_only_key_matches(key_event: KeyEvent) -> bool {
+    matches!(key_event.code, KeyCode::Char('f' | 'F'))
+        && key_event.modifiers.contains(KeyModifiers::ALT)
+        && !key_event.modifiers.contains(KeyModifiers::CONTROL)
 }
 
 fn redesign_sidebar_previous_key_matches(key_event: KeyEvent) -> bool {
@@ -666,6 +699,29 @@ mod tests {
             .collect();
     }
 
+    fn seed_model_session(app: &mut App) {
+        let thread_id = ThreadId::new();
+        app.chat_widget.handle_thread_session(ThreadSessionState {
+            thread_id,
+            forked_from_id: None,
+            fork_parent_title: None,
+            thread_name: None,
+            model: "test-model".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            service_tier: None,
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
+            permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
+            cwd: app.config.cwd.clone(),
+            instruction_source_paths: Vec::new(),
+            reasoning_effort: Some(ReasoningEffortConfig::default()),
+            message_history: None,
+            network_proxy: None,
+            rollout_path: None,
+        });
+    }
+
     #[tokio::test]
     async fn app_keymap_shortcuts_are_disabled_while_keymap_view_is_active() {
         let mut app = make_test_app().await;
@@ -712,6 +768,20 @@ mod tests {
 
         assert_eq!(action, RedesignShortcutAction::Redraw);
         assert!(!app.redesign_sidebar_state.focused());
+    }
+
+    #[tokio::test]
+    async fn redesign_alt_b_also_toggles_sidebar_focus() {
+        let mut app = make_test_app().await;
+        app.redesign_chrome_enabled = true;
+
+        let action = handle_redesign_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT),
+        );
+
+        assert_eq!(action, RedesignShortcutAction::Redraw);
+        assert!(app.redesign_sidebar_state.focused());
     }
 
     #[tokio::test]
@@ -877,6 +947,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn redesign_alt_h_opens_shortcuts_view() {
+        let mut app = make_test_app().await;
+        app.redesign_chrome_enabled = true;
+
+        let action = handle_redesign_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::ALT),
+        );
+
+        assert_eq!(action, RedesignShortcutAction::Redraw);
+        assert!(app.chat_widget.redesign_should_render_bottom_pane());
+        assert!(!app.app_keymap_shortcuts_available());
+    }
+
+    #[tokio::test]
     async fn redesign_f2_opens_slash_commands_on_empty_draft() {
         let mut app = make_test_app().await;
         app.redesign_chrome_enabled = true;
@@ -887,6 +972,36 @@ mod tests {
         assert_eq!(action, RedesignShortcutAction::Redraw);
         assert_eq!(app.chat_widget.composer_text_with_pending(), "/");
         assert!(app.chat_widget.redesign_should_render_bottom_pane());
+    }
+
+    #[tokio::test]
+    async fn redesign_alt_slash_opens_slash_commands_on_empty_draft() {
+        let mut app = make_test_app().await;
+        app.redesign_chrome_enabled = true;
+
+        let action = handle_redesign_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('/'), KeyModifiers::ALT),
+        );
+
+        assert_eq!(action, RedesignShortcutAction::Redraw);
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "/");
+        assert!(app.chat_widget.redesign_should_render_bottom_pane());
+    }
+
+    #[tokio::test]
+    async fn redesign_alt_slash_with_draft_stays_with_composer() {
+        let mut app = make_test_app().await;
+        app.redesign_chrome_enabled = true;
+        app.chat_widget.insert_str("draft");
+
+        let action = handle_redesign_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('/'), KeyModifiers::ALT),
+        );
+
+        assert_eq!(action, RedesignShortcutAction::None);
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "draft");
     }
 
     #[tokio::test]
@@ -904,32 +1019,71 @@ mod tests {
     async fn redesign_f4_opens_model_popup() {
         let mut app = make_test_app().await;
         app.redesign_chrome_enabled = true;
-        let thread_id = ThreadId::new();
-        app.chat_widget.handle_thread_session(ThreadSessionState {
-            thread_id,
-            forked_from_id: None,
-            fork_parent_title: None,
-            thread_name: None,
-            model: "test-model".to_string(),
-            model_provider_id: "test-provider".to_string(),
-            service_tier: None,
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: ApprovalsReviewer::User,
-            permission_profile: PermissionProfile::read_only(),
-            active_permission_profile: None,
-            cwd: app.config.cwd.clone(),
-            instruction_source_paths: Vec::new(),
-            reasoning_effort: Some(ReasoningEffortConfig::default()),
-            message_history: None,
-            network_proxy: None,
-            rollout_path: None,
-        });
+        seed_model_session(&mut app);
 
         let action =
             handle_redesign_key(&mut app, KeyEvent::new(KeyCode::F(4), KeyModifiers::NONE));
 
         assert_eq!(action, RedesignShortcutAction::Redraw);
         assert!(app.chat_widget.redesign_should_render_bottom_pane());
+    }
+
+    #[tokio::test]
+    async fn redesign_alt_m_opens_model_popup_on_empty_draft() {
+        let mut app = make_test_app().await;
+        app.redesign_chrome_enabled = true;
+        seed_model_session(&mut app);
+
+        let action = handle_redesign_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('m'), KeyModifiers::ALT),
+        );
+
+        assert_eq!(action, RedesignShortcutAction::Redraw);
+        assert!(app.chat_widget.redesign_should_render_bottom_pane());
+    }
+
+    #[tokio::test]
+    async fn redesign_alt_n_returns_start_new_chat_action() {
+        let mut app = make_test_app().await;
+        app.redesign_chrome_enabled = true;
+
+        let action = handle_redesign_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('n'), KeyModifiers::ALT),
+        );
+
+        assert_eq!(action, RedesignShortcutAction::StartNewChat);
+    }
+
+    #[tokio::test]
+    async fn redesign_alt_f_toggles_final_only_on_empty_draft() {
+        let mut app = make_test_app().await;
+        app.redesign_chrome_enabled = true;
+
+        let action = handle_redesign_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::ALT),
+        );
+
+        assert_eq!(action, RedesignShortcutAction::Redraw);
+        assert!(app.redesign_final_only_transcript);
+    }
+
+    #[tokio::test]
+    async fn redesign_alt_f_with_draft_stays_with_composer() {
+        let mut app = make_test_app().await;
+        app.redesign_chrome_enabled = true;
+        app.chat_widget.insert_str("draft");
+
+        let action = handle_redesign_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::ALT),
+        );
+
+        assert_eq!(action, RedesignShortcutAction::None);
+        assert!(!app.redesign_final_only_transcript);
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "draft");
     }
 
     #[tokio::test]
@@ -1019,6 +1173,21 @@ mod tests {
 
         assert_eq!(action, RedesignShortcutAction::None);
         assert_eq!(app.redesign_transcript_scroll, 0);
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "draft");
+    }
+
+    #[tokio::test]
+    async fn redesign_left_right_with_draft_stay_with_composer() {
+        let mut app = make_test_app().await;
+        app.redesign_chrome_enabled = true;
+        app.chat_widget.insert_str("draft");
+
+        let left = handle_redesign_key(&mut app, KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        let right =
+            handle_redesign_key(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+
+        assert_eq!(left, RedesignShortcutAction::None);
+        assert_eq!(right, RedesignShortcutAction::None);
         assert_eq!(app.chat_widget.composer_text_with_pending(), "draft");
     }
 }

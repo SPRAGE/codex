@@ -8,6 +8,7 @@ use codex_tui::Cli;
 use codex_tui::ExitReason;
 use codex_tui::run_main;
 use codex_utils_cli::CliConfigOverrides;
+use std::ffi::OsString;
 use supports_color::Stream;
 
 fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<String> {
@@ -47,7 +48,8 @@ struct TopCli {
 
 fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
-        let top_cli = TopCli::parse();
+        let top_cli =
+            TopCli::parse_from(args_with_joined_prompt_after_terminator(std::env::args_os()));
         let mut inner = top_cli.inner;
         inner
             .config_overrides
@@ -75,4 +77,53 @@ fn main() -> anyhow::Result<()> {
         }
         Ok(())
     })
+}
+
+fn args_with_joined_prompt_after_terminator(
+    args: impl IntoIterator<Item = OsString>,
+) -> Vec<OsString> {
+    let args = args.into_iter().collect::<Vec<_>>();
+    let Some(separator_index) = args.iter().position(|arg| arg == "--") else {
+        return args;
+    };
+    if args.len().saturating_sub(separator_index + 1) <= 1 {
+        return args;
+    }
+
+    let mut joined = String::new();
+    for arg in &args[separator_index + 1..] {
+        if !joined.is_empty() {
+            joined.push(' ');
+        }
+        joined.push_str(&arg.to_string_lossy());
+    }
+
+    let mut normalized = args[..=separator_index].to_vec();
+    normalized.push(OsString::from(joined));
+    normalized
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn joins_prompt_words_after_option_terminator() {
+        let args = args_with_joined_prompt_after_terminator(
+            ["codex-tui", "--redesign-tui", "--", "resume", "optimize"].map(OsString::from),
+        );
+
+        let top_cli = TopCli::try_parse_from(args).expect("valid cli");
+        assert_eq!(top_cli.inner.prompt.as_deref(), Some("resume optimize"));
+    }
+
+    #[test]
+    fn leaves_single_prompt_after_option_terminator_unchanged() {
+        let args = args_with_joined_prompt_after_terminator(
+            ["codex-tui", "--redesign-tui", "--", "resume"].map(OsString::from),
+        );
+
+        let top_cli = TopCli::try_parse_from(args).expect("valid cli");
+        assert_eq!(top_cli.inner.prompt.as_deref(), Some("resume"));
+    }
 }

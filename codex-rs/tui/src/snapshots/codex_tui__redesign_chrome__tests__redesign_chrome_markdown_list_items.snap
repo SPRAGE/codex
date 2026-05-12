@@ -1,0 +1,18 @@
+---
+source: tui/src/redesign_chrome.rs
+expression: rendered
+---
+" Codex                                                                  "
+" ╭──────────────────────────────────────────────────────╮               "
+" │ What changed:                                        │               "
+" │                                                      │               "
+" │ - Added /persistent-skill command support.           │               "
+" │ - Added persistent skill resolution/status/clear     │               "
+" │   logic.                                             │               "
+" │ - Wired user turns to inject once, then keep compact │               "
+" │   instructions.                                      │               "
+" │                                                      │               "
+" │ TAIL_SENTINEL                                        │               "
+" ╰──────────────────────────────────────────────────────╯               "
+"                                                                        "
+"                                                                        "

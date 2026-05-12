@@ -1,0 +1,11 @@
+---
+source: tui/src/redesign_chrome.rs
+expression: "render_composer_fixture_with_queue(52,\ncomposer_desired_height(52, \"\", &queued_messages), \"\", &queued_messages,)"
+---
+"----------------------------------------------------"
+"QUE> 2 queued messages                              "
+"  ↳ Queued follow-up question                       "
+"  ↳ Please also check the terminal resize case.     "
+"----------------------------------------------------"
+"MSG> Describe the next change...                    "
+"----------------------------------------------------"

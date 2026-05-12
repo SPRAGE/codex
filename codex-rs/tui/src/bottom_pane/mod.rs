@@ -824,6 +824,10 @@ impl BottomPane {
         self.composer.current_text_with_pending()
     }
 
+    pub(crate) fn composer_cursor(&self) -> usize {
+        self.composer.current_cursor()
+    }
+
     /// Returns whether the composer currently accepts interactive draft edits.
     pub(crate) fn composer_input_enabled(&self) -> bool {
         self.composer.input_enabled()

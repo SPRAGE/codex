@@ -6,6 +6,7 @@ use crate::CommandChoice;
 use crate::DemoMode;
 use crate::FocusTarget;
 use crate::Overlay;
+use ratatui::layout::Position;
 
 #[test]
 fn demo_mode_controls_blocking_surfaces() {
@@ -54,6 +55,23 @@ fn command_palette_can_simulate_approval() {
     assert!(state.approval.is_some());
     assert_eq!(state.focus, FocusTarget::Approval);
     assert_eq!(state.overlay, Overlay::None);
+}
+
+#[test]
+fn composer_cursor_position_tracks_draft_cursor() {
+    let mut state = RedesignState::demo(DemoMode::Idle);
+    state.composer.draft = "hello".to_string();
+    state.composer.cursor = "he".len();
+
+    assert_eq!(
+        composer_cursor_position(
+            Rect::new(
+                /*x*/ 0, /*y*/ 0, /*width*/ 100, /*height*/ 24
+            ),
+            &state
+        ),
+        Some(Position { x: 32, y: 21 })
+    );
 }
 
 #[test]

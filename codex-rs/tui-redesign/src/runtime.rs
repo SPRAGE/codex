@@ -21,17 +21,15 @@ use ratatui::backend::CrosstermBackend;
 use crate::DemoMode;
 use crate::FocusTarget;
 use crate::Overlay;
-use crate::RedesignApp;
 use crate::RedesignState;
+use crate::render::render_frame;
 
 pub fn run_terminal_preview(initial_mode: DemoMode) -> io::Result<()> {
     let mut session = TerminalSession::enter()?;
     let mut state = RedesignState::demo(initial_mode);
 
     loop {
-        session.terminal.draw(|frame| {
-            frame.render_widget(RedesignApp::new(&state), frame.area());
-        })?;
+        session.terminal.draw(|frame| render_frame(frame, &state))?;
 
         if event::poll(Duration::from_millis(250))?
             && let Event::Key(key_event) = event::read()?
@@ -95,19 +93,10 @@ fn handle_key_event(state: &mut RedesignState, key_event: KeyEvent) -> bool {
     }
 
     match key_event {
-        KeyEvent {
-            code: KeyCode::Char('?'),
-            ..
-        } if state.focus != FocusTarget::Composer => state.overlay = Overlay::Help,
-        KeyEvent {
-            code: KeyCode::F(2),
-            ..
-        } => state.open_commands(),
-        KeyEvent {
-            code: KeyCode::Char('p'),
-            modifiers,
-            ..
-        } if modifiers.contains(KeyModifiers::CONTROL) => state.open_commands(),
+        _ if help_key_matches(key_event, state.focus) => state.overlay = Overlay::Help,
+        _ if command_key_matches(key_event, state.focus, state.composer.draft.is_empty()) => {
+            state.open_commands();
+        }
         KeyEvent {
             code: KeyCode::Char('r'),
             modifiers,
@@ -158,21 +147,56 @@ fn handle_key_event(state: &mut RedesignState, key_event: KeyEvent) -> bool {
             ..
         } if state.focus == FocusTarget::Composer => state.submit_composer(),
         KeyEvent {
+            code: KeyCode::Left,
+            ..
+        } if state.focus == FocusTarget::Composer => state.composer.move_left(),
+        KeyEvent {
+            code: KeyCode::Right,
+            ..
+        } if state.focus == FocusTarget::Composer => state.composer.move_right(),
+        KeyEvent {
+            code: KeyCode::Home,
+            ..
+        } if state.focus == FocusTarget::Composer => state.composer.move_to_start(),
+        KeyEvent {
+            code: KeyCode::End, ..
+        } if state.focus == FocusTarget::Composer => state.composer.move_to_end(),
+        KeyEvent {
             code: KeyCode::Backspace,
             ..
-        } if state.focus == FocusTarget::Composer => {
-            state.composer.draft.pop();
-        }
+        } if state.focus == FocusTarget::Composer => state.composer.backspace(),
+        KeyEvent {
+            code: KeyCode::Delete,
+            ..
+        } if state.focus == FocusTarget::Composer => state.composer.delete(),
         KeyEvent {
             code: KeyCode::Char(character),
             modifiers,
             ..
         } if state.focus == FocusTarget::Composer && accepts_text_input(modifiers) => {
-            state.composer.draft.push(character);
+            state.composer.insert_char(character);
         }
         _ => {}
     }
     false
+}
+
+fn help_key_matches(key_event: KeyEvent, focus: FocusTarget) -> bool {
+    matches!(key_event.code, KeyCode::F(1))
+        || matches!(key_event.code, KeyCode::Char('h' | 'H'))
+            && key_event.modifiers.contains(KeyModifiers::ALT)
+            && !key_event.modifiers.contains(KeyModifiers::CONTROL)
+        || focus != FocusTarget::Composer && matches!(key_event.code, KeyCode::Char('?'))
+}
+
+fn command_key_matches(key_event: KeyEvent, focus: FocusTarget, composer_empty: bool) -> bool {
+    matches!(key_event.code, KeyCode::F(2))
+        || matches!(key_event.code, KeyCode::Char('p' | 'P'))
+            && key_event.modifiers.contains(KeyModifiers::CONTROL)
+        || (focus != FocusTarget::Composer || composer_empty)
+            && matches!(key_event.code, KeyCode::Char('/'))
+            && key_event.modifiers.contains(KeyModifiers::ALT)
+            && !key_event.modifiers.contains(KeyModifiers::CONTROL)
 }
 
 fn handle_overlay_key(state: &mut RedesignState, key_event: KeyEvent) -> bool {
@@ -279,6 +303,30 @@ mod tests {
     }
 
     #[test]
+    fn f1_opens_help() {
+        let mut state = RedesignState::demo(DemoMode::Idle);
+
+        let should_exit =
+            handle_key_event(&mut state, KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE));
+
+        assert!(!should_exit);
+        assert_eq!(state.overlay, Overlay::Help);
+    }
+
+    #[test]
+    fn alt_h_opens_help() {
+        let mut state = RedesignState::demo(DemoMode::Idle);
+
+        let should_exit = handle_key_event(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::ALT),
+        );
+
+        assert!(!should_exit);
+        assert_eq!(state.overlay, Overlay::Help);
+    }
+
+    #[test]
     fn f2_opens_commands_overlay() {
         let mut state = RedesignState::demo(DemoMode::Idle);
 
@@ -287,6 +335,35 @@ mod tests {
 
         assert!(!should_exit);
         assert_eq!(state.overlay, Overlay::Commands);
+    }
+
+    #[test]
+    fn alt_slash_opens_commands_overlay_from_empty_composer() {
+        let mut state = RedesignState::demo(DemoMode::Idle);
+
+        let should_exit = handle_key_event(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('/'), KeyModifiers::ALT),
+        );
+
+        assert!(!should_exit);
+        assert_eq!(state.overlay, Overlay::Commands);
+    }
+
+    #[test]
+    fn alt_slash_with_draft_keeps_composer_text() {
+        let mut state = RedesignState::demo(DemoMode::Idle);
+        state.composer.draft = "draft".to_string();
+        state.composer.cursor = state.composer.draft.len();
+
+        let should_exit = handle_key_event(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('/'), KeyModifiers::ALT),
+        );
+
+        assert!(!should_exit);
+        assert_eq!(state.overlay, Overlay::None);
+        assert_eq!(state.composer.draft, "draft");
     }
 
     #[test]
@@ -322,5 +399,60 @@ mod tests {
         assert!(!should_exit);
         assert!(state.approval.is_some());
         assert_eq!(state.overlay, Overlay::None);
+    }
+
+    #[test]
+    fn composer_arrow_keys_edit_at_cursor() {
+        let mut state = RedesignState::demo(DemoMode::Idle);
+
+        for character in ['w', 'o', 'r', 'd'] {
+            let should_exit = handle_key_event(
+                &mut state,
+                KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE),
+            );
+            assert!(!should_exit);
+        }
+        handle_key_event(&mut state, KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        handle_key_event(&mut state, KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        handle_key_event(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('X'), KeyModifiers::SHIFT),
+        );
+        handle_key_event(
+            &mut state,
+            KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+        );
+        handle_key_event(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('!'), KeyModifiers::SHIFT),
+        );
+
+        assert_eq!(state.composer.draft, "woXr!d");
+        assert_eq!(state.composer.cursor, "woXr!".len());
+    }
+
+    #[test]
+    fn composer_backspace_and_delete_edit_at_cursor() {
+        let mut state = RedesignState::demo(DemoMode::Idle);
+        for character in ['a', 'b', 'c', 'd'] {
+            handle_key_event(
+                &mut state,
+                KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE),
+            );
+        }
+
+        handle_key_event(&mut state, KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        handle_key_event(&mut state, KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        handle_key_event(
+            &mut state,
+            KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+        );
+        handle_key_event(
+            &mut state,
+            KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE),
+        );
+
+        assert_eq!(state.composer.draft, "ad");
+        assert_eq!(state.composer.cursor, "a".len());
     }
 }

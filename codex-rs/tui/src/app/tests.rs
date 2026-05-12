@@ -4605,6 +4605,138 @@ async fn inactive_redesign_chat_completion_marks_unread_and_queues_notification(
 }
 
 #[tokio::test]
+async fn redesign_assistant_transcript_label_tracks_named_agent_thread() {
+    let mut app = make_test_app().await;
+    let main_thread_id = ThreadId::new();
+    let agent_thread_id = ThreadId::new();
+    app.primary_thread_id = Some(main_thread_id);
+    app.active_thread_id = Some(main_thread_id);
+    app.upsert_agent_picker_thread(
+        main_thread_id,
+        /*agent_nickname*/ None,
+        /*agent_role*/ None,
+        /*is_closed*/ false,
+    );
+    app.upsert_agent_picker_thread(
+        agent_thread_id,
+        Some("Scout".to_string()),
+        Some("explorer".to_string()),
+        /*is_closed*/ false,
+    );
+
+    assert_eq!(app.redesign_assistant_transcript_label(), "Codex");
+
+    app.active_thread_id = Some(agent_thread_id);
+
+    assert_eq!(
+        app.redesign_assistant_transcript_label(),
+        "Scout [explorer]"
+    );
+}
+
+#[tokio::test]
+async fn parallel_agent_deltas_stay_thread_scoped() -> Result<()> {
+    let mut app = make_test_app().await;
+    let main_thread_id =
+        ThreadId::from_string("00000000-0000-0000-0000-000000000101").expect("valid thread");
+    let scout_thread_id =
+        ThreadId::from_string("00000000-0000-0000-0000-000000000202").expect("valid thread");
+    let patch_thread_id =
+        ThreadId::from_string("00000000-0000-0000-0000-000000000303").expect("valid thread");
+    app.primary_thread_id = Some(main_thread_id);
+    app.upsert_agent_picker_thread(
+        main_thread_id,
+        /*agent_nickname*/ None,
+        /*agent_role*/ None,
+        /*is_closed*/ false,
+    );
+    app.upsert_agent_picker_thread(
+        scout_thread_id,
+        Some("Scout".to_string()),
+        Some("explorer".to_string()),
+        /*is_closed*/ false,
+    );
+    app.upsert_agent_picker_thread(
+        patch_thread_id,
+        Some("Patch".to_string()),
+        Some("worker".to_string()),
+        /*is_closed*/ false,
+    );
+    app.thread_event_channels.insert(
+        scout_thread_id,
+        ThreadEventChannel::new_with_session(
+            THREAD_EVENT_CHANNEL_CAPACITY,
+            test_thread_session(scout_thread_id, test_path_buf("/tmp/scout")),
+            Vec::new(),
+        ),
+    );
+    app.thread_event_channels.insert(
+        patch_thread_id,
+        ThreadEventChannel::new_with_session(
+            THREAD_EVENT_CHANNEL_CAPACITY,
+            test_thread_session(patch_thread_id, test_path_buf("/tmp/patch")),
+            Vec::new(),
+        ),
+    );
+    app.activate_thread_channel(scout_thread_id).await;
+
+    app.enqueue_thread_notification(
+        patch_thread_id,
+        agent_message_delta_notification(patch_thread_id, "turn-patch", "agent-patch", "patch-1"),
+    )
+    .await?;
+    app.enqueue_thread_notification(
+        scout_thread_id,
+        agent_message_delta_notification(scout_thread_id, "turn-scout", "agent-scout", "scout-1"),
+    )
+    .await?;
+    app.enqueue_thread_notification(
+        patch_thread_id,
+        agent_message_delta_notification(patch_thread_id, "turn-patch", "agent-patch", "patch-2"),
+    )
+    .await?;
+
+    let active_rx = app
+        .active_thread_rx
+        .as_mut()
+        .expect("active scout receiver");
+    assert_matches!(
+        active_rx.try_recv(),
+        Ok(ThreadBufferedEvent::Notification(ServerNotification::AgentMessageDelta(
+            notification
+        ))) if notification.thread_id == scout_thread_id.to_string()
+            && notification.delta == "scout-1"
+    );
+    assert_matches!(
+        active_rx.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    );
+
+    let patch_events = {
+        let store = app
+            .thread_event_channels
+            .get(&patch_thread_id)
+            .expect("patch channel")
+            .store
+            .lock()
+            .await;
+        store.snapshot().events
+    };
+    let patch_deltas = patch_events
+        .iter()
+        .filter_map(|event| match event {
+            ThreadBufferedEvent::Notification(ServerNotification::AgentMessageDelta(
+                notification,
+            )) => Some(notification.delta.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(patch_deltas, vec!["patch-1", "patch-2"]);
+    Ok(())
+}
+
+#[tokio::test]
 async fn redesign_chat_entries_follow_thread_name_updates() {
     let mut app = make_test_app().await;
     let thread_id = ThreadId::new();

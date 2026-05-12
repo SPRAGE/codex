@@ -1,6 +1,6 @@
 ---
 source: tui-redesign/src/render/tests.rs
-assertion_line: 80
+assertion_line: 98
 expression: "render_to_string(120, 32, &state).expect(\"render\")"
 ---
  CODEX_CLI v0.0.0 | NETWORK | MOD: gpt-5.4 xhigh | PERM: workspace-write | APPV: auto-review | CTX: 72% left            
@@ -16,7 +16,7 @@ PATH: ~/root/dev       │──────────────────
                        │┌─[ APVL_REQ ]───────────────────────────────────────────────────────────────┐                 │
                        ││ CMD: git commit -m "Update TUI layout"                                     │                 │
                        ││ RSN: Commit requested by user                                              │                 │
-                       ││ [ APPROVE ]  [ APV_SESS ]  [ DENY ]                                        │                 │
+                       ││ [ APPROVE ]  [ APPROVE SESSION ]  [ DENY ]                                 │                 │
                        │└────────────────────────────────────────────────────────────────────────────┘                 │
                        │                                                                                               │
                        │                                                                                               │
@@ -34,4 +34,4 @@ PATH: ~/root/dev       │──────────────────
                        │ MSG> Describe the next change...                                                               
                        │────────────────────────────────────────────────────────────────────────────────────────────────
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- (C) OPENAI_CODEX  F1 HELP  F2 CMD  F3 CLR  ESC EXIT  ? shortcuts  C-R history  C-T transcript  S-Tab mode
+ (C) OPENAI_CODEX  Alt-H HELP  Alt-/ CMD  ESC EXIT  ? shortcuts  C-R history  C-T transcript  S-Tab mode

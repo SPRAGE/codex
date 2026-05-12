@@ -1292,7 +1292,7 @@ impl ChatComposer {
         self.sync_popups();
     }
 
-    fn current_cursor(&self) -> usize {
+    pub(crate) fn current_cursor(&self) -> usize {
         self.textarea.cursor() + if self.is_bash_mode { 1 } else { 0 }
     }
 

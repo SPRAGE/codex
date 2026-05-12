@@ -26,6 +26,7 @@ pub enum SlashCommand {
     AutoReview,
     Memories,
     Skills,
+    PersistentSkill,
     Hooks,
     Review,
     Rename,
@@ -92,6 +93,7 @@ impl SlashCommand {
             SlashCommand::Diff => "show git diff (including untracked files)",
             SlashCommand::Mention => "mention a file",
             SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
+            SlashCommand::PersistentSkill => "keep one skill active for future turns",
             SlashCommand::Hooks => "view and manage lifecycle hooks",
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
@@ -151,6 +153,7 @@ impl SlashCommand {
                 | SlashCommand::Keymap
                 | SlashCommand::Mcp
                 | SlashCommand::Raw
+                | SlashCommand::PersistentSkill
                 | SlashCommand::Side
                 | SlashCommand::Resume
                 | SlashCommand::SandboxReadRoot
@@ -199,6 +202,7 @@ impl SlashCommand {
             | SlashCommand::Rename
             | SlashCommand::Mention
             | SlashCommand::Skills
+            | SlashCommand::PersistentSkill
             | SlashCommand::Hooks
             | SlashCommand::Status
             | SlashCommand::DebugConfig
@@ -270,6 +274,8 @@ mod tests {
         assert!(SlashCommand::Raw.available_during_task());
         assert!(SlashCommand::Raw.available_in_side_conversation());
         assert!(SlashCommand::Raw.supports_inline_args());
+        assert!(SlashCommand::PersistentSkill.available_during_task());
+        assert!(SlashCommand::PersistentSkill.supports_inline_args());
     }
 
     #[test]

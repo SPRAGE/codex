@@ -2087,6 +2087,79 @@ async fn raw_slash_command_reports_usage_for_invalid_arg() {
 }
 
 #[tokio::test]
+async fn persistent_skill_injects_skill_once_then_keeps_compact_guardrail() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    let skill_path = test_path_buf("/tmp/skills/virtual-tech-org/SKILL.md").abs();
+    chat.set_skills(Some(vec![SkillMetadata {
+        name: "virtual-tech-org".to_string(),
+        description: "Virtual tech org".to_string(),
+        short_description: None,
+        interface: None,
+        dependencies: None,
+        policy: None,
+        path_to_skills_md: skill_path.clone(),
+        scope: crate::test_support::skill_scope_user(),
+        plugin_id: None,
+    }]));
+
+    chat.dispatch_command_with_args(
+        SlashCommand::PersistentSkill,
+        "virtual-tech-org".to_string(),
+        Vec::new(),
+    );
+    chat.submit_user_message(UserMessage::from("start discovery"));
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            items,
+            collaboration_mode: Some(mode),
+            ..
+        } => {
+            assert_eq!(
+                items,
+                vec![
+                    UserInput::Text {
+                        text: "start discovery".to_string(),
+                        text_elements: Vec::new(),
+                    },
+                    UserInput::Skill {
+                        name: "virtual-tech-org".to_string(),
+                        path: skill_path.to_path_buf(),
+                    },
+                ]
+            );
+            let instructions = mode.settings.developer_instructions.unwrap_or_default();
+            assert!(instructions.contains("Persistent skill mode is active"));
+            assert!(instructions.contains("virtual-tech-org"));
+        }
+        other => panic!("expected persistent skill user turn, got {other:?}"),
+    }
+
+    chat.submit_user_message(UserMessage::from("continue"));
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            items,
+            collaboration_mode: Some(mode),
+            ..
+        } => {
+            assert_eq!(
+                items,
+                vec![UserInput::Text {
+                    text: "continue".to_string(),
+                    text_elements: Vec::new(),
+                }]
+            );
+            let instructions = mode.settings.developer_instructions.unwrap_or_default();
+            assert!(instructions.contains("Persistent skill mode is active"));
+            assert!(instructions.contains("virtual-tech-org"));
+        }
+        other => panic!("expected compact persistent skill user turn, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn compact_queues_user_messages_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());

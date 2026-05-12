@@ -1,6 +1,6 @@
 ---
 source: tui-redesign/src/render/tests.rs
-assertion_line: 89
+assertion_line: 107
 expression: "render_to_string(72, 24, &state).expect(\"render\")"
 ---
 CODEX_CLI v0.0.0 | NETWORK | MOD: gpt-5.4 xhigh | CTX: 72% left         
@@ -16,7 +16,7 @@ Codex ────                                                             �
 ┌─[ APVL_REQ ]──────────────────────────────────────────────────────┐  │
 │ CMD: git commit -m "Update TUI layout"                            │  │
 │ RSN: Commit requested by user                                     │  │
-│ [ APPROVE ]  [ APV_SESS ]  [ DENY ]                               │  │
+│ [ APPROVE ]  [ APPROVE SESSION ]  [ DENY ]                        │  │
 └───────────────────────────────────────────────────────────────────┘  │
                                                                        │
                                                                        │
@@ -26,4 +26,4 @@ Codex ────                                                             �
 ▶ Running: linting project | Esc INT  Tab QUE                           
  MSG> Describe the next change...                                       
 ────────────────────────────────────────────────────────────────────────
-(C) OPENAI_CODEX  F1 HELP  F2 CMD  F3 CLR  ESC EXIT  ? shortcuts  C-R hi
+(C) OPENAI_CODEX  Alt-H HELP  Alt-/ CMD  ESC EXIT  ? shortcuts  C-R hist

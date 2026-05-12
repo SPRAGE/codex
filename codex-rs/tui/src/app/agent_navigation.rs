@@ -231,6 +231,30 @@ impl AgentNavigationState {
         )
     }
 
+    /// Derives the assistant speaker label for the transcript bubble header.
+    ///
+    /// The main thread still renders as Codex. Named non-primary agent threads render with the same
+    /// nickname/role label used by the picker so the visible chat identity stays tied to the
+    /// thread-local metadata rather than any global "current agent" state.
+    pub(crate) fn transcript_agent_label(
+        &self,
+        current_displayed_thread_id: Option<ThreadId>,
+        primary_thread_id: Option<ThreadId>,
+    ) -> Option<String> {
+        let thread_id = current_displayed_thread_id?;
+        if primary_thread_id == Some(thread_id) {
+            return None;
+        }
+
+        let entry = self.threads.get(&thread_id)?;
+        let label = format_agent_picker_item_name(
+            entry.agent_nickname.as_deref(),
+            entry.agent_role.as_deref(),
+            /*is_primary*/ false,
+        );
+        (!matches!(label.as_str(), "Agent" | "Main [default]")).then_some(label)
+    }
+
     /// Builds the `/agent` picker subtitle from the same canonical bindings used by key handling.
     ///
     /// Keeping this text derived from the actual shortcut helpers prevents the picker copy from
@@ -349,6 +373,20 @@ mod tests {
         assert_eq!(
             state.active_agent_label(Some(main_thread_id), Some(main_thread_id)),
             Some("Main [default]".to_string())
+        );
+    }
+
+    #[test]
+    fn transcript_agent_label_uses_named_non_primary_thread() {
+        let (state, main_thread_id, first_agent_id, _) = populated_state();
+
+        assert_eq!(
+            state.transcript_agent_label(Some(first_agent_id), Some(main_thread_id)),
+            Some("Robie [explorer]".to_string())
+        );
+        assert_eq!(
+            state.transcript_agent_label(Some(main_thread_id), Some(main_thread_id)),
+            None
         );
     }
 }

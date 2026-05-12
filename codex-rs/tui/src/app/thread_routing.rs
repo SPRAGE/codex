@@ -179,6 +179,12 @@ impl App {
         format!("Agent ({short_id})")
     }
 
+    pub(crate) fn redesign_assistant_transcript_label(&self) -> String {
+        self.agent_navigation
+            .transcript_agent_label(self.current_displayed_thread_id(), self.primary_thread_id)
+            .unwrap_or_else(|| "Codex".to_string())
+    }
+
     pub(super) fn existing_redesign_new_chat_thread_id(&self) -> Option<ThreadId> {
         let current_thread_id = self.current_displayed_thread_id();
         if current_thread_id

@@ -74,7 +74,8 @@ fn print_help() {
     println!();
     println!("Live controls:");
     println!("  Tab / Shift+Tab moves focus");
-    println!("  F2 or Ctrl+P opens the command palette");
+    println!("  Alt-/ or Ctrl+P opens the command palette");
+    println!("  Alt-H opens shortcuts");
     println!("  ? opens shortcuts when the composer is not focused");
     println!("  1 idle, 2 running, 3 approval");
     println!("  Esc, q, or Ctrl+C exits");

@@ -75,6 +75,7 @@ pub struct ComposerState {
     pub title: String,
     pub placeholder: String,
     pub draft: String,
+    pub cursor: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -212,6 +213,7 @@ impl RedesignState {
                 title: "Message Codex".to_string(),
                 placeholder: "Describe the next change...".to_string(),
                 draft: String::new(),
+                cursor: 0,
             },
             footer_shortcuts: vec![
                 FooterShortcut {
@@ -350,7 +352,7 @@ impl RedesignState {
                 }];
                 self.approval = None;
                 self.work = None;
-                self.composer.draft.clear();
+                self.composer.clear();
                 self.focus = FocusTarget::Composer;
                 self.overlay = Overlay::None;
                 self.status = "Started a new local design thread".to_string();
@@ -382,7 +384,7 @@ impl RedesignState {
                 self.status = "Simulated an approval request".to_string();
             }
             CommandChoice::ClearDraft => {
-                self.composer.draft.clear();
+                self.composer.clear();
                 self.focus = FocusTarget::Composer;
                 self.overlay = Overlay::None;
                 self.status = "Cleared composer draft".to_string();
@@ -424,7 +426,7 @@ impl RedesignState {
             text: "Queued. This prototype records the turn locally; wiring to Codex core is the next integration step."
                 .to_string(),
         });
-        self.composer.draft.clear();
+        self.composer.clear();
         self.work = Some(WorkStatus {
             label: "Queued".to_string(),
             detail: "waiting for Codex core integration".to_string(),
@@ -457,5 +459,107 @@ impl RedesignState {
         });
         self.focus = FocusTarget::Composer;
         self.status = detail.to_string();
+    }
+}
+
+impl ComposerState {
+    pub fn clear(&mut self) {
+        self.draft.clear();
+        self.cursor = 0;
+    }
+
+    pub fn insert_char(&mut self, character: char) {
+        self.clamp_cursor();
+        self.draft.insert(self.cursor, character);
+        self.cursor += character.len_utf8();
+    }
+
+    pub fn backspace(&mut self) {
+        self.clamp_cursor();
+        if self.cursor == 0 {
+            return;
+        }
+
+        let previous = self
+            .draft
+            .get(..self.cursor)
+            .and_then(|text| text.char_indices().next_back())
+            .map(|(index, _)| index)
+            .unwrap_or(0);
+        self.draft.drain(previous..self.cursor);
+        self.cursor = previous;
+    }
+
+    pub fn delete(&mut self) {
+        self.clamp_cursor();
+        if self.cursor == self.draft.len() {
+            return;
+        }
+
+        let next = self
+            .draft
+            .get(self.cursor..)
+            .and_then(|text| text.chars().next())
+            .map(|character| self.cursor + character.len_utf8())
+            .unwrap_or(self.draft.len());
+        self.draft.drain(self.cursor..next);
+    }
+
+    pub fn move_left(&mut self) {
+        self.clamp_cursor();
+        if self.cursor == 0 {
+            return;
+        }
+
+        self.cursor = self
+            .draft
+            .get(..self.cursor)
+            .and_then(|text| text.char_indices().next_back())
+            .map(|(index, _)| index)
+            .unwrap_or(0);
+    }
+
+    pub fn move_right(&mut self) {
+        self.clamp_cursor();
+        if self.cursor == self.draft.len() {
+            return;
+        }
+
+        self.cursor = self
+            .draft
+            .get(self.cursor..)
+            .and_then(|text| text.chars().next())
+            .map(|character| self.cursor + character.len_utf8())
+            .unwrap_or(self.draft.len());
+    }
+
+    pub fn move_to_start(&mut self) {
+        self.cursor = 0;
+    }
+
+    pub fn move_to_end(&mut self) {
+        self.cursor = self.draft.len();
+    }
+
+    pub fn cursor_display_width(&self) -> u16 {
+        let mut cursor = self.cursor.min(self.draft.len());
+        while !self.draft.is_char_boundary(cursor) {
+            cursor -= 1;
+        }
+
+        self.draft
+            .get(..cursor)
+            .unwrap_or_default()
+            .chars()
+            .count()
+            .try_into()
+            .unwrap_or(u16::MAX)
+    }
+
+    fn clamp_cursor(&mut self) {
+        self.cursor = self.cursor.min(self.draft.len());
+        while !self.draft.is_char_boundary(self.cursor) {
+            self.cursor -= 1;
+        }
     }
 }
