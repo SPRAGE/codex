@@ -597,7 +597,7 @@ emit_release_flake() {
         };
 
         checks."tarball-sha256" = pkgs.runCommand "custom-codex-tarball-sha256" { } ''
-          actual=$(\${pkgs.coreutils}/bin/sha256sum \${tarball} | \${pkgs.coreutils}/bin/cut -d' ' -f1)
+          actual=\$(\${pkgs.coreutils}/bin/sha256sum \${tarball} | \${pkgs.coreutils}/bin/cut -d' ' -f1)
           expected="${sha}"
           if [ "\$actual" != "\$expected" ]; then
             echo "sha256 mismatch for \${tarball}" >&2
