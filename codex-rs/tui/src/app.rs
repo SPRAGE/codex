@@ -199,6 +199,8 @@ mod input;
 mod loaded_threads;
 mod pending_interactive_replay;
 mod platform_actions;
+mod redesign_chat_close;
+mod redesign_chat_start;
 mod replay_filter;
 mod resize_reflow;
 mod session_lifecycle;
@@ -228,6 +230,11 @@ enum ThreadInteractiveRequest {
     AppLink(AppLinkViewParams),
     Approval(ApprovalRequest),
     McpServerElicitation(McpServerElicitationFormRequest),
+}
+
+struct PendingRedesignChatStart {
+    request_id: Uuid,
+    config: Config,
 }
 
 /// Extracts `receiver_thread_ids` from collab agent tool-call notifications.
@@ -546,9 +553,11 @@ pub(crate) struct App {
     pub(crate) redesign_sidebar_state: redesign_chrome::RedesignSidebarState,
     pub(crate) redesign_transcript_scroll: usize,
     pub(crate) redesign_final_only_transcript: bool,
+    redesign_plan_window_open_threads: HashSet<ThreadId>,
     redesign_chat_names: HashMap<ThreadId, String>,
     redesign_chat_activity: HashMap<ThreadId, redesign_chrome::RedesignChatActivity>,
     redesign_chat_unread: HashSet<ThreadId>,
+    pending_redesign_chat_start: Option<PendingRedesignChatStart>,
     pending_redesign_chat_notifications: VecDeque<String>,
 }
 
@@ -607,6 +616,27 @@ fn active_turn_steer_race(error: &TypedRequestError) -> Option<ActiveTurnSteerRa
 }
 
 impl App {
+    pub(crate) fn redesign_plan_window_open_for_active_chat(&self) -> bool {
+        self.chat_widget
+            .thread_id()
+            .is_some_and(|thread_id| self.redesign_plan_window_open_threads.contains(&thread_id))
+    }
+
+    pub(crate) fn toggle_redesign_plan_window_for_active_chat(&mut self) {
+        let Some(thread_id) = self.chat_widget.thread_id() else {
+            return;
+        };
+        if !self.redesign_plan_window_open_threads.remove(&thread_id) {
+            self.redesign_plan_window_open_threads.insert(thread_id);
+        }
+    }
+
+    pub(crate) fn close_redesign_plan_window_for_active_chat(&mut self) -> bool {
+        self.chat_widget
+            .thread_id()
+            .is_some_and(|thread_id| self.redesign_plan_window_open_threads.remove(&thread_id))
+    }
+
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,
         tui: &mut tui::Tui,
@@ -959,9 +989,11 @@ See the Codex keymap documentation for supported actions and examples."
             redesign_sidebar_state: redesign_chrome::RedesignSidebarState::default(),
             redesign_transcript_scroll: 0,
             redesign_final_only_transcript: false,
+            redesign_plan_window_open_threads: HashSet::new(),
             redesign_chat_names: HashMap::new(),
             redesign_chat_activity: HashMap::new(),
             redesign_chat_unread: HashSet::new(),
+            pending_redesign_chat_start: None,
             pending_redesign_chat_notifications: VecDeque::new(),
         };
         if let Some(entry) = startup_hooks_browser {
@@ -1151,10 +1183,19 @@ See the Codex keymap documentation for supported actions and examples."
             }
         }
 
-        if self.redesign_chrome_enabled && input::redesign_global_quit_key_matches(&event) {
-            return Ok(self
-                .handle_exit_mode(app_server, ExitMode::ShutdownFirst)
-                .await);
+        if self.redesign_chrome_enabled {
+            match input::redesign_ctrl_c_action(&event, self.chat_widget.composer_is_empty()) {
+                input::RedesignCtrlCAction::Ignore => {}
+                input::RedesignCtrlCAction::RouteToChatWidget(key_event) => {
+                    self.chat_widget.handle_key_event(key_event);
+                    return Ok(AppRunControl::Continue);
+                }
+                input::RedesignCtrlCAction::Quit => {
+                    return Ok(self
+                        .handle_exit_mode(app_server, ExitMode::ShutdownFirst)
+                        .await);
+                }
+            }
         }
 
         if self.overlay.is_some() {

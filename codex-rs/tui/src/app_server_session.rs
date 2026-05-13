@@ -166,9 +166,17 @@ impl ThreadParamsMode {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct AppServerStartedThread {
     pub(crate) session: ThreadSessionState,
     pub(crate) turns: Vec<Turn>,
+}
+
+pub(crate) struct AppServerThreadStartRequest {
+    request_handle: AppServerRequestHandle,
+    request_id: RequestId,
+    thread_params_mode: ThreadParamsMode,
+    remote_cwd_override: Option<PathBuf>,
 }
 
 impl AppServerSession {
@@ -962,10 +970,44 @@ impl AppServerSession {
         self.client.request_handle()
     }
 
+    pub(crate) fn thread_start_request(&mut self) -> AppServerThreadStartRequest {
+        AppServerThreadStartRequest {
+            request_handle: self.request_handle(),
+            request_id: self.next_request_id(),
+            thread_params_mode: self.thread_params_mode(),
+            remote_cwd_override: self.remote_cwd_override.clone(),
+        }
+    }
+
     fn next_request_id(&mut self) -> RequestId {
         let request_id = self.next_request_id;
         self.next_request_id += 1;
         RequestId::Integer(request_id)
+    }
+}
+
+impl AppServerThreadStartRequest {
+    pub(crate) async fn start_thread(
+        self,
+        config: Config,
+        session_start_source: Option<ThreadStartSource>,
+    ) -> Result<AppServerStartedThread> {
+        let response: ThreadStartResponse = self
+            .request_handle
+            .request_typed(ClientRequest::ThreadStart {
+                request_id: self.request_id,
+                params: thread_start_params_from_config(
+                    &config,
+                    self.thread_params_mode,
+                    self.remote_cwd_override.as_deref(),
+                    session_start_source,
+                ),
+            })
+            .await
+            .map_err(|err| {
+                bootstrap_request_error("thread/start failed while starting a TUI chat", err)
+            })?;
+        started_thread_from_start_response(response, &config, self.thread_params_mode).await
     }
 }
 

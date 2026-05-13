@@ -1,5 +1,6 @@
 ---
 source: tui/src/redesign_chrome.rs
+assertion_line: 2318
 expression: "render_fixture(72, 18)"
 ---
 "CODEX_CLI dev                                                           "
@@ -19,4 +20,4 @@ expression: "render_fixture(72, 18)"
 "------------------------------------------------------------------------"
 "MSG> Describe the next change...                                        "
 "------------------------------------------------------------------------"
-"~/codes/codex · red...  Alt-H help  Alt-/ cmds  C-T transcript  C-C exit"
+"~/codes/codex · re...  Alt-H help  Alt-W close  C-T transcript  C-C exit"

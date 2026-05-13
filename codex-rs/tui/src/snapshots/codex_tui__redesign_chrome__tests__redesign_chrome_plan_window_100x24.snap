@@ -1,0 +1,29 @@
+---
+source: tui/src/redesign_chrome.rs
+assertion_line: 2467
+expression: terminal.backend().to_string()
+---
+"CODEX_CLI dev                                                                                       "
+"----------------------------------------------------------------------------------------------------"
+" CHATS                 |ready  chat test-model medium  ctx 100% left  tokens in 0 / out 0 / total 0 "
+" Alt-B focus           |--┌ Plan  Alt-P close ───────────────────────────────────────────────────┐--"
+"                       |MS│• Updated Plan                                                        │  "
+" No chats yet          |  │  └ Current implementation checklist                                  │  "
+"                       |  │    ✔ Inspect existing plan rendering                                 │  "
+" ACTIONS               |  │    □ Add per-chat floating window                                    │  "
+"  N      NEW CHAT      |  │    □ Cover shortcut and render behavior                              │  "
+"  F      FINAL ONLY OFF|  │                                                                      │  "
+"  Alt-/  COMMANDS      |  │                                                                      │  "
+"  Alt-M  MODELS        |  │                                                                      │  "
+"  C-R    HISTORY       |  │                                                                      │  "
+"  C-T    TRANSCRIPT    |  │                                                                      │  "
+"  C-G    EDITOR        |  │                                                                      │  "
+"                       |  │                                                                      │  "
+"                       |  │                                                                      │  "
+"                       |  │                                                                      │  "
+"                       |  └──────────────────────────────────────────────────────────────────────┘  "
+"                       |                                                                            "
+"                       |----------------------------------------------------------------------------"
+"                       |MSG> Describe the next change...                                            "
+"                       |----------------------------------------------------------------------------"
+"/tmp/project · unknown · -- · Plan chat  Alt-H help  Alt-W close  C-T transcript  C-C exit          "

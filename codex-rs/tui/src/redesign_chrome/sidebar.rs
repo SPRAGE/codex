@@ -80,6 +80,10 @@ impl RedesignSidebarState {
         };
     }
 
+    pub(crate) fn normalize_for_chat_count(&mut self, chat_count: usize) {
+        self.normalize_selection(chat_count);
+    }
+
     fn normalize_selection(&mut self, chat_count: usize) {
         if chat_count == 0 {
             if matches!(self.selected, RedesignSidebarSelection::Chat(_)) {

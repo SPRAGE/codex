@@ -1,5 +1,6 @@
 ---
 source: tui/src/redesign_chrome.rs
+assertion_line: 2327
 expression: "render_fixture_with_sidebar(72, 18, sidebar)"
 ---
 "CODEX_CLI dev                                                           "
@@ -19,4 +20,4 @@ expression: "render_fixture_with_sidebar(72, 18, sidebar)"
 "  C-R    HISTORY     |--------------------------------------------------"
 "  C-T    TRANSCRIPT  |MSG> Describe the next change...                  "
 "  C-G    EDITOR      |--------------------------------------------------"
-"~/codes/codex · red...  Alt-H help  Alt-/ cmds  C-T transcript  C-C exit"
+"~/codes/codex · re...  Alt-H help  Alt-W close  C-T transcript  C-C exit"

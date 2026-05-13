@@ -31,8 +31,10 @@ use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
+use uuid::Uuid;
 
 use crate::app_command::AppCommand;
+use crate::app_server_session::AppServerStartedThread;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
@@ -169,6 +171,12 @@ pub(crate) enum AppEvent {
 
     /// Start a new session.
     NewSession,
+
+    /// Result of a redesigned new-chat request started in the background.
+    RedesignChatStarted {
+        request_id: Uuid,
+        result: Result<AppServerStartedThread, String>,
+    },
 
     /// Clear the terminal UI (screen + scrollback), start a fresh session, and keep the
     /// previous chat resumable.

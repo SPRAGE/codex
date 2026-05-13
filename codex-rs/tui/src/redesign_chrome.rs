@@ -27,6 +27,9 @@ use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use ratatui::widgets::Block;
+use ratatui::widgets::Borders;
+use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use std::time::Instant;
@@ -252,6 +255,7 @@ pub(crate) fn render_app(area: Rect, buf: &mut Buffer, app: &App) -> AppFrameRen
     if legacy_bottom_pane {
         app.chat_widget
             .render_redesign_bottom_pane(layout.composer, buf);
+        render_plan_window_from_app(layout.main, buf, app);
         return AppFrameRender {
             cursor_pos: app
                 .chat_widget
@@ -271,6 +275,7 @@ pub(crate) fn render_app(area: Rect, buf: &mut Buffer, app: &App) -> AppFrameRen
         app.chat_widget.redesign_composer_cursor(),
         &queued_messages,
     );
+    render_plan_window_from_app(layout.main, buf, app);
     AppFrameRender {
         cursor_pos,
         cursor_style: SetCursorStyle::SteadyBar,
@@ -355,6 +360,57 @@ fn layout_for(area: Rect, app: &App, legacy_bottom_pane: bool) -> RedesignLayout
 
 fn render_background(area: Rect, buf: &mut Buffer) {
     buf.set_style(area, Style::default().bg(Color::Black));
+}
+
+fn render_plan_window_from_app(area: Rect, buf: &mut Buffer, app: &App) {
+    if !app.redesign_plan_window_open_for_active_chat() || area.width < 24 || area.height < 8 {
+        return;
+    }
+
+    let Some(panel) = plan_window_rect(area) else {
+        return;
+    };
+    let content_width = panel.width.saturating_sub(4).max(1);
+    let mut lines = if let Some(lines) = app
+        .chat_widget
+        .redesign_latest_plan_display_lines(content_width)
+    {
+        lines
+    } else {
+        vec![
+            "No plan for this chat yet.".dim().italic().into(),
+            "Waiting for update_plan or Plan mode output.".dim().into(),
+        ]
+    };
+
+    let max_content_rows = panel.height.saturating_sub(2) as usize;
+    if lines.len() > max_content_rows {
+        lines.truncate(max_content_rows.saturating_sub(1));
+        lines.push("...".dim().into());
+    }
+
+    let block = Block::default()
+        .title(" Plan  Alt-P close ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().magenta());
+    let inner = block.inner(panel);
+    Clear.render(panel, buf);
+    block.render(panel, buf);
+    Paragraph::new(lines).render(inner, buf);
+}
+
+fn plan_window_rect(area: Rect) -> Option<Rect> {
+    let width = area.width.saturating_sub(4).min(72).max(24);
+    let height = area.height.saturating_sub(4).min(16).max(6);
+    if width > area.width || height > area.height {
+        return None;
+    }
+    Some(Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 3,
+        width,
+        height,
+    })
 }
 
 fn render_top_bar(area: Rect, buf: &mut Buffer, context: &RedesignChromeContext) {
@@ -1225,8 +1281,8 @@ fn render_footer(area: Rect, buf: &mut Buffer, context: &RedesignChromeContext) 
         return;
     }
 
-    let line = if area.width >= 90 {
-        let hints = "  Alt-B side  Alt-H help  Alt-/ cmds  Alt-M model  C-T transcript  C-C exit";
+    let line = if area.width >= 112 {
+        let hints = "  Alt-B side  Alt-H help  Alt-/ cmds  Alt-M model  Alt-P plan  Alt-W close  C-T transcript  C-C exit";
         let workspace_width = area
             .width
             .saturating_sub(UnicodeWidthStr::width(hints) as u16);
@@ -1241,13 +1297,17 @@ fn render_footer(area: Rect, buf: &mut Buffer, context: &RedesignChromeContext) 
             " cmds".dim(),
             "  Alt-M".cyan(),
             " model".dim(),
+            "  Alt-P".cyan(),
+            " plan".dim(),
+            "  Alt-W".cyan(),
+            " close".dim(),
             "  C-T".cyan(),
             " transcript".dim(),
             "  C-C".cyan(),
             " exit".dim(),
         ])
     } else if area.width >= 64 {
-        let hints = "  Alt-H help  Alt-/ cmds  C-T transcript  C-C exit";
+        let hints = "  Alt-H help  Alt-W close  C-T transcript  C-C exit";
         let workspace_width = area
             .width
             .saturating_sub(UnicodeWidthStr::width(hints) as u16);
@@ -1256,8 +1316,8 @@ fn render_footer(area: Rect, buf: &mut Buffer, context: &RedesignChromeContext) 
             Span::from(workspace).dim(),
             "  Alt-H".cyan(),
             " help".dim(),
-            "  Alt-/".cyan(),
-            " cmds".dim(),
+            "  Alt-W".cyan(),
+            " close".dim(),
             "  C-T".cyan(),
             " transcript".dim(),
             "  C-C".cyan(),
@@ -2057,7 +2117,13 @@ fn line_width(line: &Line<'_>) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_app_server_protocol::AskForApproval;
+    use codex_protocol::ThreadId;
+    use codex_protocol::config_types::ApprovalsReviewer;
     use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+    use codex_protocol::plan_tool::PlanItemArg;
+    use codex_protocol::plan_tool::StepStatus;
+    use codex_protocol::plan_tool::UpdatePlanArgs;
     use insta::assert_snapshot;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -2084,6 +2150,29 @@ mod tests {
 
     fn render_fixture(width: u16, height: u16) -> String {
         render_fixture_with_sidebar(width, height, RedesignSidebarState::default())
+    }
+
+    fn seed_test_thread(app: &mut App) {
+        app.chat_widget
+            .handle_thread_session(crate::session_state::ThreadSessionState {
+                thread_id: ThreadId::new(),
+                forked_from_id: None,
+                fork_parent_title: None,
+                thread_name: Some("Plan chat".to_string()),
+                model: "test-model".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                permission_profile: PermissionProfile::read_only(),
+                active_permission_profile: None,
+                cwd: app.config.cwd.clone(),
+                instruction_source_paths: Vec::new(),
+                reasoning_effort: Some(ReasoningEffortConfig::default()),
+                message_history: None,
+                network_proxy: None,
+                rollout_path: None,
+            });
     }
 
     fn render_fixture_with_sidebar(
@@ -2343,6 +2432,69 @@ mod tests {
         assert!(app.chat_widget.redesign_should_render_bottom_pane());
         assert!(!rendered.contains("Describe the next change..."));
         assert!(rendered.contains("/"));
+    }
+
+    #[tokio::test]
+    async fn plan_window_renders_latest_plan_snapshot() {
+        let mut app = crate::app::test_support::make_test_app().await;
+        app.redesign_chrome_enabled = true;
+        seed_test_thread(&mut app);
+        app.chat_widget
+            .set_redesign_latest_plan_update_for_test(UpdatePlanArgs {
+                explanation: Some("Current implementation checklist".to_string()),
+                plan: vec![
+                    PlanItemArg {
+                        step: "Inspect existing plan rendering".to_string(),
+                        status: StepStatus::Completed,
+                    },
+                    PlanItemArg {
+                        step: "Add per-chat floating window".to_string(),
+                        status: StepStatus::InProgress,
+                    },
+                    PlanItemArg {
+                        step: "Cover shortcut and render behavior".to_string(),
+                        status: StepStatus::Pending,
+                    },
+                ],
+            });
+        app.toggle_redesign_plan_window_for_active_chat();
+
+        let mut terminal =
+            Terminal::new(TestBackend::new(/*width*/ 100, /*height*/ 24)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                render_app(frame.area(), frame.buffer_mut(), &app);
+            })
+            .expect("draw");
+
+        assert_snapshot!(
+            "redesign_chrome_plan_window_100x24",
+            terminal.backend().to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn plan_window_falls_back_to_latest_proposed_plan() {
+        let mut app = crate::app::test_support::make_test_app().await;
+        app.redesign_chrome_enabled = true;
+        seed_test_thread(&mut app);
+        app.chat_widget.set_redesign_latest_proposed_plan_for_test(
+            "## Plan\n\n- Inspect plan sources\n- Render proposed plan fallback\n".to_string(),
+        );
+        app.toggle_redesign_plan_window_for_active_chat();
+
+        let mut terminal =
+            Terminal::new(TestBackend::new(/*width*/ 100, /*height*/ 24)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                render_app(frame.area(), frame.buffer_mut(), &app);
+            })
+            .expect("draw");
+        let rendered = terminal.backend().to_string();
+
+        assert!(rendered.contains("Proposed Plan"));
+        assert!(rendered.contains("Inspect plan sources"));
+        assert!(rendered.contains("Render proposed plan fallback"));
     }
 
     #[test]

@@ -17,11 +17,29 @@ impl App {
     ) -> Result<AppRunControl> {
         match event {
             AppEvent::NewSession => {
-                self.start_fresh_session_with_summary_hint(
-                    tui, app_server, /*session_start_source*/ None,
-                    /*initial_user_message*/ None,
-                )
-                .await;
+                if self.redesign_chrome_enabled {
+                    if let Err(err) = self.start_redesign_chat_from_ui(tui, app_server).await {
+                        self.chat_widget
+                            .add_error_message(format!("Failed to start a new chat: {err}"));
+                    }
+                    tui.frame_requester().schedule_frame();
+                } else {
+                    self.start_fresh_session_with_summary_hint(
+                        tui, app_server, /*session_start_source*/ None,
+                        /*initial_user_message*/ None,
+                    )
+                    .await;
+                }
+            }
+            AppEvent::RedesignChatStarted { request_id, result } => {
+                if let Err(err) = self
+                    .finish_redesign_chat_start(tui, request_id, result)
+                    .await
+                {
+                    self.chat_widget
+                        .add_error_message(format!("Failed to start a new chat: {err}"));
+                }
+                tui.frame_requester().schedule_frame();
             }
             AppEvent::ClearUi => {
                 self.clear_terminal_ui(tui, /*redraw_header*/ false)?;

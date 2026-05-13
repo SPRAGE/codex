@@ -13,23 +13,52 @@ enum RedesignShortcutAction {
     OpenTranscript,
     OpenExternalEditor,
     OpenChat(ThreadId),
+    CloseChat(ThreadId),
     StartNewChat,
+    TogglePlanWindow,
+    ClosePlanWindow,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RedesignCtrlCAction {
+    Ignore,
+    RouteToChatWidget(KeyEvent),
+    Quit,
 }
 
 const REDESIGN_LINE_SCROLL: usize = 3;
 
-pub(super) fn redesign_global_quit_key_matches(event: &TuiEvent) -> bool {
-    matches!(
-        event,
-        TuiEvent::Key(KeyEvent {
-            code: KeyCode::Char(c),
-            modifiers,
-            kind: KeyEventKind::Press,
-            ..
-        }) if modifiers.contains(KeyModifiers::CONTROL)
+pub(super) fn redesign_ctrl_c_action(
+    event: &TuiEvent,
+    composer_is_empty: bool,
+) -> RedesignCtrlCAction {
+    let Some(key_event) = redesign_global_ctrl_c_key_event(event) else {
+        return RedesignCtrlCAction::Ignore;
+    };
+    if composer_is_empty {
+        RedesignCtrlCAction::Quit
+    } else {
+        RedesignCtrlCAction::RouteToChatWidget(key_event)
+    }
+}
+
+fn redesign_global_ctrl_c_key_event(event: &TuiEvent) -> Option<KeyEvent> {
+    match event {
+        TuiEvent::Key(
+            key_event @ KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
+            },
+        ) if modifiers.contains(KeyModifiers::CONTROL)
             && !modifiers.contains(KeyModifiers::ALT)
-            && c.eq_ignore_ascii_case(&'c')
-    )
+            && c.eq_ignore_ascii_case(&'c') =>
+        {
+            Some(*key_event)
+        }
+        _ => None,
+    }
 }
 
 impl App {
@@ -215,12 +244,31 @@ impl App {
                 tui.frame_requester().schedule_frame();
                 return;
             }
+            RedesignShortcutAction::CloseChat(thread_id) => {
+                if let Err(err) = self.close_redesign_chat(tui, app_server, thread_id).await {
+                    self.chat_widget
+                        .add_error_message(format!("Failed to close chat {thread_id}: {err}"));
+                }
+                tui.frame_requester().schedule_frame();
+                return;
+            }
             RedesignShortcutAction::StartNewChat => {
                 self.redesign_sidebar_state.blur();
-                if let Err(err) = self.start_redesign_chat(tui, app_server).await {
+                if let Err(err) = self.start_redesign_chat_from_ui(tui, app_server).await {
                     self.chat_widget
                         .add_error_message(format!("Failed to start a new chat: {err}"));
                 }
+                tui.frame_requester().schedule_frame();
+                return;
+            }
+            RedesignShortcutAction::TogglePlanWindow => {
+                self.redesign_sidebar_state.blur();
+                self.toggle_redesign_plan_window_for_active_chat();
+                tui.frame_requester().schedule_frame();
+                return;
+            }
+            RedesignShortcutAction::ClosePlanWindow => {
+                self.close_redesign_plan_window_for_active_chat();
                 tui.frame_requester().schedule_frame();
                 return;
             }
@@ -368,6 +416,12 @@ impl App {
             return self.handle_redesign_sidebar_key(key_event, chat_count);
         }
 
+        if self.redesign_plan_window_open_for_active_chat()
+            && matches!(key_event.code, KeyCode::Esc)
+        {
+            return RedesignShortcutAction::ClosePlanWindow;
+        }
+
         if let Some(action) = self.handle_redesign_transcript_scroll_key(key_event, viewport_area) {
             return action;
         }
@@ -392,6 +446,13 @@ impl App {
             _ if composer_empty && redesign_new_chat_key_matches(key_event) => {
                 self.redesign_sidebar_state.blur();
                 RedesignShortcutAction::StartNewChat
+            }
+            _ if redesign_close_chat_key_matches(key_event) => self
+                .current_displayed_thread_id()
+                .map(RedesignShortcutAction::CloseChat)
+                .unwrap_or(RedesignShortcutAction::Redraw),
+            _ if redesign_plan_window_key_matches(key_event) => {
+                RedesignShortcutAction::TogglePlanWindow
             }
             _ if composer_empty && redesign_final_only_key_matches(key_event) => {
                 self.redesign_final_only_transcript = !self.redesign_final_only_transcript;
@@ -501,6 +562,16 @@ impl App {
         key_event: KeyEvent,
         chat_count: usize,
     ) -> RedesignShortcutAction {
+        if redesign_plan_window_key_matches(key_event) {
+            return RedesignShortcutAction::TogglePlanWindow;
+        }
+        if redesign_close_chat_key_matches(key_event) {
+            return self
+                .selected_redesign_sidebar_chat()
+                .or_else(|| self.current_displayed_thread_id())
+                .map(RedesignShortcutAction::CloseChat)
+                .unwrap_or(RedesignShortcutAction::Redraw);
+        }
         if redesign_sidebar_global_key_should_pass_through(key_event) {
             return RedesignShortcutAction::None;
         }
@@ -549,10 +620,9 @@ impl App {
         self.redesign_sidebar_state.blur();
 
         match selected {
-            redesign_chrome::RedesignSidebarSelection::Chat(idx) => self
-                .redesign_chat_entries()
-                .get(idx)
-                .map(|entry| RedesignShortcutAction::OpenChat(entry.thread_id))
+            redesign_chrome::RedesignSidebarSelection::Chat(_) => self
+                .selected_redesign_sidebar_chat()
+                .map(RedesignShortcutAction::OpenChat)
                 .unwrap_or(RedesignShortcutAction::Redraw),
             redesign_chrome::RedesignSidebarSelection::Action(
                 redesign_chrome::RedesignSidebarItem::NewChat,
@@ -597,6 +667,17 @@ impl App {
         self.overlay.is_none() && self.chat_widget.no_modal_or_popup_active()
     }
 
+    fn selected_redesign_sidebar_chat(&self) -> Option<ThreadId> {
+        let redesign_chrome::RedesignSidebarSelection::Chat(idx) =
+            self.redesign_sidebar_state.selected()
+        else {
+            return None;
+        };
+        self.redesign_chat_entries()
+            .get(idx)
+            .map(|entry| entry.thread_id)
+    }
+
     pub(super) fn refresh_status_line(&mut self) {
         self.chat_widget.refresh_status_line();
     }
@@ -638,8 +719,20 @@ fn redesign_new_chat_key_matches(key_event: KeyEvent) -> bool {
         && !key_event.modifiers.contains(KeyModifiers::CONTROL)
 }
 
+fn redesign_close_chat_key_matches(key_event: KeyEvent) -> bool {
+    matches!(key_event.code, KeyCode::Char('w' | 'W'))
+        && key_event.modifiers.contains(KeyModifiers::ALT)
+        && !key_event.modifiers.contains(KeyModifiers::CONTROL)
+}
+
 fn redesign_final_only_key_matches(key_event: KeyEvent) -> bool {
     matches!(key_event.code, KeyCode::Char('f' | 'F'))
+        && key_event.modifiers.contains(KeyModifiers::ALT)
+        && !key_event.modifiers.contains(KeyModifiers::CONTROL)
+}
+
+fn redesign_plan_window_key_matches(key_event: KeyEvent) -> bool {
+    matches!(key_event.code, KeyCode::Char('p' | 'P'))
         && key_event.modifiers.contains(KeyModifiers::ALT)
         && !key_event.modifiers.contains(KeyModifiers::CONTROL)
 }
@@ -785,6 +878,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn redesign_alt_p_toggles_plan_window_for_current_chat() {
+        let mut app = make_test_app().await;
+        app.redesign_chrome_enabled = true;
+        seed_model_session(&mut app);
+
+        let action = handle_redesign_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::ALT),
+        );
+
+        assert_eq!(action, RedesignShortcutAction::TogglePlanWindow);
+        app.toggle_redesign_plan_window_for_active_chat();
+        assert!(app.redesign_plan_window_open_for_active_chat());
+
+        let action = handle_redesign_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert_eq!(action, RedesignShortcutAction::ClosePlanWindow);
+        app.close_redesign_plan_window_for_active_chat();
+        assert!(!app.redesign_plan_window_open_for_active_chat());
+    }
+
+    #[tokio::test]
+    async fn redesign_alt_w_closes_current_chat() {
+        let mut app = make_test_app().await;
+        app.redesign_chrome_enabled = true;
+        let thread_id = ThreadId::new();
+        app.primary_thread_id = Some(thread_id);
+        app.active_thread_id = Some(thread_id);
+        app.upsert_agent_picker_thread(
+            thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
+            /*is_closed*/ false,
+        );
+
+        let action = handle_redesign_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('w'), KeyModifiers::ALT),
+        );
+
+        assert_eq!(action, RedesignShortcutAction::CloseChat(thread_id));
+    }
+
+    #[tokio::test]
     async fn redesign_sidebar_navigation_selects_items() {
         let mut app = make_test_app().await;
         app.redesign_chrome_enabled = true;
@@ -839,6 +974,41 @@ mod tests {
 
         assert_eq!(action, RedesignShortcutAction::OpenChat(thread_id));
         assert!(!app.redesign_sidebar_state.focused());
+    }
+
+    #[tokio::test]
+    async fn redesign_sidebar_alt_w_closes_selected_chat() {
+        let mut app = make_test_app().await;
+        app.redesign_chrome_enabled = true;
+        let first_thread_id = ThreadId::new();
+        let second_thread_id = ThreadId::new();
+        app.primary_thread_id = Some(first_thread_id);
+        app.active_thread_id = Some(first_thread_id);
+        app.upsert_agent_picker_thread(
+            first_thread_id,
+            /*agent_nickname*/ None,
+            /*agent_role*/ None,
+            /*is_closed*/ false,
+        );
+        app.upsert_agent_picker_thread(
+            second_thread_id,
+            Some("Second".to_string()),
+            /*agent_role*/ None,
+            /*is_closed*/ false,
+        );
+
+        handle_redesign_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL),
+        );
+        handle_redesign_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        let action = handle_redesign_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('w'), KeyModifiers::ALT),
+        );
+
+        assert_eq!(action, RedesignShortcutAction::CloseChat(second_thread_id));
+        assert!(app.redesign_sidebar_state.focused());
     }
 
     #[tokio::test]
@@ -1137,29 +1307,55 @@ mod tests {
     }
 
     #[test]
-    fn redesign_global_quit_key_matches_ctrl_c_only() {
-        assert!(redesign_global_quit_key_matches(&TuiEvent::Key(
-            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)
-        )));
-        assert!(redesign_global_quit_key_matches(&TuiEvent::Key(
-            KeyEvent::new(KeyCode::Char('C'), KeyModifiers::CONTROL)
-        )));
-        assert!(!redesign_global_quit_key_matches(&TuiEvent::Key(
-            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL)
-        )));
-        assert!(!redesign_global_quit_key_matches(&TuiEvent::Key(
-            KeyEvent::new(
-                KeyCode::Char('c'),
-                KeyModifiers::CONTROL | KeyModifiers::ALT
-            )
-        )));
-        assert!(!redesign_global_quit_key_matches(&TuiEvent::Key(
-            KeyEvent::new_with_kind(
-                KeyCode::Char('c'),
-                KeyModifiers::CONTROL,
-                KeyEventKind::Release,
-            )
-        )));
+    fn redesign_ctrl_c_action_routes_nonempty_composer_before_quit() {
+        let key_event = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(
+            redesign_ctrl_c_action(&TuiEvent::Key(key_event), /*composer_is_empty*/ false),
+            RedesignCtrlCAction::RouteToChatWidget(key_event)
+        );
+        assert_eq!(
+            redesign_ctrl_c_action(&TuiEvent::Key(key_event), /*composer_is_empty*/ true),
+            RedesignCtrlCAction::Quit
+        );
+        assert_eq!(
+            redesign_ctrl_c_action(&TuiEvent::Draw, /*composer_is_empty*/ false),
+            RedesignCtrlCAction::Ignore
+        );
+        assert_eq!(
+            redesign_ctrl_c_action(
+                &TuiEvent::Key(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::CONTROL)),
+                /*composer_is_empty*/ true
+            ),
+            RedesignCtrlCAction::Quit
+        );
+        assert_eq!(
+            redesign_ctrl_c_action(
+                &TuiEvent::Key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL)),
+                /*composer_is_empty*/ true
+            ),
+            RedesignCtrlCAction::Ignore
+        );
+        assert_eq!(
+            redesign_ctrl_c_action(
+                &TuiEvent::Key(KeyEvent::new(
+                    KeyCode::Char('c'),
+                    KeyModifiers::CONTROL | KeyModifiers::ALT
+                )),
+                /*composer_is_empty*/ true
+            ),
+            RedesignCtrlCAction::Ignore
+        );
+        assert_eq!(
+            redesign_ctrl_c_action(
+                &TuiEvent::Key(KeyEvent::new_with_kind(
+                    KeyCode::Char('c'),
+                    KeyModifiers::CONTROL,
+                    KeyEventKind::Release,
+                )),
+                /*composer_is_empty*/ true
+            ),
+            RedesignCtrlCAction::Ignore
+        );
     }
 
     #[tokio::test]

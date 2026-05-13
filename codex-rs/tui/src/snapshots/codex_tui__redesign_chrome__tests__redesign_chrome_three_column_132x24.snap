@@ -1,5 +1,6 @@
 ---
 source: tui/src/redesign_chrome.rs
+assertion_line: 2310
 expression: "render_fixture(132, 24)"
 ---
 "CODEX_CLI dev                                                                                                                       "
@@ -25,4 +26,4 @@ expression: "render_fixture(132, 24)"
 "                       |------------------------------------------------------------------------------|                             "
 "                       |MSG> Describe the next change...                                              |                             "
 "                       |------------------------------------------------------------------------------|                             "
-"~/codes/codex · redesign-tui · 3 files · Improve termi...  Alt-B side  Alt-H help  Alt-/ cmds  Alt-M model  C-T transcript  C-C exit"
+"~/codes/codex · redesign-tui ...  Alt-B side  Alt-H help  Alt-/ cmds  Alt-M model  Alt-P plan  Alt-W close  C-T transcript  C-C exit"

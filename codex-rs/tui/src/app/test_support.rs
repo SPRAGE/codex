@@ -66,9 +66,11 @@ pub(crate) async fn make_test_app() -> App {
         redesign_sidebar_state: redesign_chrome::RedesignSidebarState::default(),
         redesign_transcript_scroll: 0,
         redesign_final_only_transcript: false,
+        redesign_plan_window_open_threads: HashSet::new(),
         redesign_chat_names: HashMap::new(),
         redesign_chat_activity: HashMap::new(),
         redesign_chat_unread: HashSet::new(),
+        pending_redesign_chat_start: None,
         pending_redesign_chat_notifications: VecDeque::new(),
     }
 }

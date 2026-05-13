@@ -437,6 +437,7 @@ impl App {
         self.primary_session_configured = None;
         self.pending_primary_events.clear();
         self.pending_app_server_requests.clear();
+        self.pending_redesign_chat_start = None;
         self.chat_widget.set_pending_thread_approvals(Vec::new());
         self.sync_active_agent_label();
     }
@@ -507,72 +508,6 @@ impl App {
             }
         }
         tui.frame_requester().schedule_frame();
-    }
-
-    pub(super) async fn start_redesign_chat(
-        &mut self,
-        tui: &mut tui::Tui,
-        app_server: &mut AppServerSession,
-    ) -> Result<()> {
-        self.refresh_in_memory_config_from_disk_best_effort("starting a new chat")
-            .await;
-
-        if let Some(thread_id) = self.existing_redesign_new_chat_thread_id() {
-            if self.current_displayed_thread_id() == Some(thread_id) {
-                return Ok(());
-            }
-            self.select_agent_thread_and_discard_side(tui, app_server, thread_id)
-                .await?;
-            return Ok(());
-        }
-
-        let previous_thread_id = self.active_thread_id.or(self.chat_widget.thread_id());
-        if let Some(thread_id) = previous_thread_id {
-            let existing_entry = self.agent_navigation.get(&thread_id).cloned();
-            let agent_nickname = existing_entry
-                .as_ref()
-                .and_then(|entry| entry.agent_nickname.clone())
-                .or_else(|| self.redesign_thread_display_name(thread_id));
-            let agent_role = existing_entry
-                .as_ref()
-                .and_then(|entry| entry.agent_role.clone());
-            let is_closed = existing_entry.as_ref().is_some_and(|entry| entry.is_closed);
-            self.upsert_agent_picker_thread(thread_id, agent_nickname, agent_role, is_closed);
-        }
-
-        let previous_config = self.config.clone();
-        let config = self.fresh_session_config();
-        self.config = config.clone();
-        self.store_active_thread_receiver().await;
-        self.active_thread_id = None;
-        self.active_thread_rx = None;
-
-        let started = match app_server.start_thread(&config).await {
-            Ok(started) => started,
-            Err(err) => {
-                self.config = previous_config;
-                if let Some(thread_id) = previous_thread_id {
-                    self.activate_thread_channel(thread_id).await;
-                }
-                return Err(err);
-            }
-        };
-
-        let init = self.chatwidget_init_for_forked_or_resumed_thread(
-            tui,
-            self.config.clone(),
-            /*initial_user_message*/ None,
-        );
-        self.replace_chat_widget(ChatWidget::new_with_app_event(init));
-        let reset_error = self.reset_for_thread_switch(tui).err();
-        self.enqueue_primary_thread_session(started.session, started.turns)
-            .await?;
-        if let Some(err) = reset_error {
-            tracing::warn!(error = %err, "failed to clear terminal while starting redesign chat");
-            self.chat_widget
-                .add_error_message(format!("Failed to redraw new chat: {err}"));
-        }
-        Ok(())
     }
 
     pub(super) async fn replace_chat_widget_with_app_server_thread(
@@ -765,7 +700,8 @@ impl App {
             .resume_thread(resume_config.clone(), target_session.thread_id)
             .await
         {
-            Ok(resumed) => {
+            Ok(mut resumed) => {
+                Self::apply_resume_target_thread_name(&target_session, &mut resumed);
                 let resumed_thread_id = resumed.session.thread_id;
                 self.shutdown_current_thread(app_server).await;
                 self.config = resume_config;
@@ -816,6 +752,25 @@ impl App {
         }
 
         Ok(AppRunControl::Continue)
+    }
+
+    pub(super) fn apply_resume_target_thread_name(
+        target_session: &SessionTarget,
+        resumed: &mut AppServerStartedThread,
+    ) {
+        if super::thread_routing::redesign_display_thread_name(
+            resumed.session.thread_name.as_deref(),
+        )
+        .is_some()
+        {
+            return;
+        }
+
+        if let Some(thread_name) = super::thread_routing::redesign_display_thread_name(
+            target_session.display_name.as_deref(),
+        ) {
+            resumed.session.thread_name = Some(thread_name);
+        }
     }
 }
 

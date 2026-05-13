@@ -140,6 +140,7 @@ fn startup_waiting_gate_is_only_for_fresh_or_exit_session_selection() {
             crate::resume_picker::SessionTarget {
                 path: Some(PathBuf::from("/tmp/restore")),
                 thread_id: ThreadId::new(),
+                display_name: None,
             }
         )),
         false
@@ -149,6 +150,7 @@ fn startup_waiting_gate_is_only_for_fresh_or_exit_session_selection() {
             crate::resume_picker::SessionTarget {
                 path: Some(PathBuf::from("/tmp/fork")),
                 thread_id: ThreadId::new(),
+                display_name: None,
             }
         )),
         false
@@ -160,10 +162,12 @@ fn startup_paused_goal_prompt_gate_is_only_for_quiet_resume() {
     let resume = SessionSelection::Resume(crate::resume_picker::SessionTarget {
         path: Some(PathBuf::from("/tmp/restore")),
         thread_id: ThreadId::new(),
+        display_name: None,
     });
     let fork = SessionSelection::Fork(crate::resume_picker::SessionTarget {
         path: Some(PathBuf::from("/tmp/fork")),
         thread_id: ThreadId::new(),
+        display_name: None,
     });
     let no_images: Vec<PathBuf> = Vec::new();
     let initial_images = vec![PathBuf::from("/tmp/image.png")];
@@ -232,6 +236,7 @@ fn startup_waiting_gate_not_applied_for_resume_or_fork_session_selection() {
         crate::resume_picker::SessionTarget {
             path: Some(PathBuf::from("/tmp/restore")),
             thread_id: ThreadId::new(),
+            display_name: None,
         },
     ));
     assert_eq!(
@@ -245,6 +250,7 @@ fn startup_waiting_gate_not_applied_for_resume_or_fork_session_selection() {
         crate::resume_picker::SessionTarget {
             path: Some(PathBuf::from("/tmp/fork")),
             thread_id: ThreadId::new(),
+            display_name: None,
         },
     ));
     assert_eq!(
@@ -272,6 +278,7 @@ async fn ignore_same_thread_resume_reports_noop_for_current_thread() {
     let ignored = app.ignore_same_thread_resume(&crate::resume_picker::SessionTarget {
         path: Some(test_path_buf("/tmp/project")),
         thread_id,
+        display_name: None,
     });
 
     assert!(ignored);
@@ -296,10 +303,56 @@ async fn ignore_same_thread_resume_allows_reattaching_displayed_inactive_thread(
     let ignored = app.ignore_same_thread_resume(&crate::resume_picker::SessionTarget {
         path: Some(test_path_buf("/tmp/project")),
         thread_id,
+        display_name: None,
     });
 
     assert!(!ignored);
     assert!(app.transcript_cells.is_empty());
+}
+
+#[test]
+fn resume_target_thread_name_fills_unnamed_resume_response() {
+    let thread_id = ThreadId::new();
+    let target_session = crate::resume_picker::SessionTarget {
+        path: None,
+        thread_id,
+        display_name: Some("Named session".to_string()),
+    };
+    let mut resumed = AppServerStartedThread {
+        session: ThreadSessionState {
+            thread_name: Some("New thread".to_string()),
+            ..test_thread_session(thread_id, test_path_buf("/tmp/project"))
+        },
+        turns: Vec::new(),
+    };
+
+    App::apply_resume_target_thread_name(&target_session, &mut resumed);
+
+    assert_eq!(
+        resumed.session.thread_name,
+        Some("Named session".to_string())
+    );
+}
+
+#[test]
+fn resume_target_thread_name_keeps_named_resume_response() {
+    let thread_id = ThreadId::new();
+    let target_session = crate::resume_picker::SessionTarget {
+        path: None,
+        thread_id,
+        display_name: Some("Picker name".to_string()),
+    };
+    let mut resumed = AppServerStartedThread {
+        session: ThreadSessionState {
+            thread_name: Some("Server name".to_string()),
+            ..test_thread_session(thread_id, test_path_buf("/tmp/project"))
+        },
+        turns: Vec::new(),
+    };
+
+    App::apply_resume_target_thread_name(&target_session, &mut resumed);
+
+    assert_eq!(resumed.session.thread_name, Some("Server name".to_string()));
 }
 
 #[tokio::test]
@@ -3971,9 +4024,11 @@ async fn make_test_app() -> App {
         redesign_sidebar_state: redesign_chrome::RedesignSidebarState::default(),
         redesign_transcript_scroll: 0,
         redesign_final_only_transcript: false,
+        redesign_plan_window_open_threads: HashSet::new(),
         redesign_chat_names: HashMap::new(),
         redesign_chat_activity: HashMap::new(),
         redesign_chat_unread: HashSet::new(),
+        pending_redesign_chat_start: None,
         pending_redesign_chat_notifications: VecDeque::new(),
     }
 }
@@ -4042,9 +4097,11 @@ async fn make_test_app_with_channels() -> (
             redesign_sidebar_state: redesign_chrome::RedesignSidebarState::default(),
             redesign_transcript_scroll: 0,
             redesign_final_only_transcript: false,
+            redesign_plan_window_open_threads: HashSet::new(),
             redesign_chat_names: HashMap::new(),
             redesign_chat_activity: HashMap::new(),
             redesign_chat_unread: HashSet::new(),
+            pending_redesign_chat_start: None,
             pending_redesign_chat_notifications: VecDeque::new(),
         },
         rx,
@@ -4787,40 +4844,37 @@ async fn redesign_chat_entries_follow_thread_name_updates() {
 }
 
 #[tokio::test]
-async fn existing_redesign_new_chat_thread_id_finds_only_open_unnamed_chat() {
-    let mut app = make_test_app().await;
-    let named_thread_id = ThreadId::new();
-    let new_thread_id = ThreadId::new();
-    let closed_thread_id = ThreadId::new();
-    app.primary_thread_id = Some(named_thread_id);
-    app.active_thread_id = Some(named_thread_id);
-    app.upsert_agent_picker_thread(
-        named_thread_id,
-        /*agent_nickname*/ None,
-        /*agent_role*/ None,
-        /*is_closed*/ false,
-    );
-    app.remember_redesign_chat_name(named_thread_id, Some("Existing work"));
-    app.upsert_agent_picker_thread(
-        new_thread_id,
-        /*agent_nickname*/ None,
-        /*agent_role*/ None,
-        /*is_closed*/ false,
-    );
-    app.upsert_agent_picker_thread(
-        closed_thread_id,
-        /*agent_nickname*/ None,
-        /*agent_role*/ None,
-        /*is_closed*/ true,
-    );
+async fn request_redesign_chat_start_keeps_current_thread_active_while_starting() {
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    app.redesign_chrome_enabled = true;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+        app.chat_widget.config_ref(),
+    ))
+    .await
+    .expect("embedded app server");
+    let started = app_server
+        .start_thread(app.chat_widget.config_ref())
+        .await
+        .expect("thread/start should succeed");
+    app.enqueue_primary_thread_session(started.session, started.turns)
+        .await
+        .expect("primary thread should be registered");
+    let active_before = app.active_thread_id.expect("active thread");
 
+    let request = app.request_redesign_chat_start(&mut app_server).await;
+
+    let super::redesign_chat_start::RedesignChatStartRequest::Started(request_id) = request else {
+        panic!("expected background start request, got {request:?}");
+    };
+    assert_eq!(app.active_thread_id, Some(active_before));
+    assert!(app.active_thread_rx.is_some());
+    assert_eq!(app.primary_thread_id, Some(active_before));
     assert_eq!(
-        app.existing_redesign_new_chat_thread_id(),
-        Some(new_thread_id)
+        app.pending_redesign_chat_start
+            .as_ref()
+            .map(|pending| pending.request_id),
+        Some(request_id)
     );
-
-    app.remember_redesign_chat_name(new_thread_id, Some("Named work"));
-    assert_eq!(app.existing_redesign_new_chat_thread_id(), None);
 }
 
 #[tokio::test]

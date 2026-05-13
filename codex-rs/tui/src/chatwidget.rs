@@ -3273,6 +3273,7 @@ impl ChatWidget {
             })
             .count();
         self.transcript.last_plan_progress = (total > 0).then_some((completed, total));
+        self.transcript.latest_plan_update = Some(update.clone());
         self.refresh_status_surfaces();
         self.add_to_history(history_cell::new_plan_update(update));
     }
@@ -10484,6 +10485,34 @@ impl ChatWidget {
             .into_iter()
             .chain(preview.queued_messages)
             .collect()
+    }
+
+    pub(crate) fn redesign_latest_plan_display_lines(
+        &self,
+        width: u16,
+    ) -> Option<Vec<Line<'static>>> {
+        if let Some(update) = self.transcript.latest_plan_update.clone() {
+            return Some(history_cell::new_plan_update(update).display_lines(width));
+        }
+        let plan_markdown = self
+            .transcript
+            .latest_proposed_plan_markdown
+            .as_ref()
+            .filter(|plan| !plan.trim().is_empty())?;
+        Some(
+            history_cell::new_proposed_plan(plan_markdown.clone(), &self.config.cwd)
+                .display_lines(width),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_redesign_latest_plan_update_for_test(&mut self, update: UpdatePlanArgs) {
+        self.transcript.latest_plan_update = Some(update);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_redesign_latest_proposed_plan_for_test(&mut self, plan_markdown: String) {
+        self.transcript.latest_proposed_plan_markdown = Some(plan_markdown);
     }
 
     pub(crate) fn redesign_should_render_bottom_pane(&self) -> bool {

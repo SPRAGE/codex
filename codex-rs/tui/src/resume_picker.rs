@@ -75,20 +75,46 @@ const FOOTER_HINT_LEFT_PADDING: usize = 1;
 const FOOTER_HINT_GAP: usize = 3;
 const PICKER_CHROME_HEIGHT: u16 = 8;
 const PICKER_LIST_HORIZONTAL_INSET: u16 = 4;
+const EMPTY_THREAD_PREVIEW: &str = "(no message yet)";
+const LEGACY_UNNAMED_THREAD_LABEL: &str = "New thread";
 
 #[derive(Debug, Clone)]
 pub struct SessionTarget {
     pub path: Option<PathBuf>,
     pub thread_id: ThreadId,
+    pub display_name: Option<String>,
 }
 
 impl SessionTarget {
+    pub fn new(
+        path: Option<PathBuf>,
+        thread_id: ThreadId,
+        thread_name: Option<String>,
+        preview: Option<&str>,
+    ) -> Self {
+        Self {
+            path,
+            thread_id,
+            display_name: session_target_display_name(thread_name.as_deref())
+                .or_else(|| session_target_display_name(preview)),
+        }
+    }
+
     pub fn display_label(&self) -> String {
         self.path
             .as_ref()
             .map(|path| path.display().to_string())
+            .or_else(|| self.display_name.clone())
             .unwrap_or_else(|| format!("thread {}", self.thread_id))
     }
+}
+
+fn session_target_display_name(name: Option<&str>) -> Option<String> {
+    let name = name?.trim();
+    if name.is_empty() || matches!(name, EMPTY_THREAD_PREVIEW | LEGACY_UNNAMED_THREAD_LABEL) {
+        return None;
+    }
+    Some(name.to_string())
 }
 
 #[derive(Debug, Clone)]
@@ -126,8 +152,14 @@ impl SessionPickerAction {
         }
     }
 
-    fn selection(self, path: Option<PathBuf>, thread_id: ThreadId) -> SessionSelection {
-        let target_session = SessionTarget { path, thread_id };
+    fn selection(
+        self,
+        path: Option<PathBuf>,
+        thread_id: ThreadId,
+        display_name: Option<String>,
+    ) -> SessionSelection {
+        let target_session =
+            SessionTarget::new(path, thread_id, display_name, /*preview*/ None);
         match self {
             SessionPickerAction::Resume => SessionSelection::Resume(target_session),
             SessionPickerAction::Fork => SessionSelection::Fork(target_session),
@@ -844,6 +876,10 @@ impl Row {
         self.thread_name.as_deref().unwrap_or(&self.preview)
     }
 
+    fn target_display_name(&self) -> Option<String> {
+        session_target_display_name(Some(self.display_preview()))
+    }
+
     fn matches_query(&self, query: &str) -> bool {
         if self.preview.to_lowercase().contains(query) {
             return true;
@@ -1105,7 +1141,11 @@ impl PickerState {
                         },
                     };
                     if let Some(thread_id) = thread_id {
-                        return Ok(Some(self.action.selection(path, thread_id)));
+                        return Ok(Some(self.action.selection(
+                            path,
+                            thread_id,
+                            row.target_display_name(),
+                        )));
                     }
                     self.inline_error = Some(match path {
                         Some(path) => {
@@ -1801,7 +1841,7 @@ fn row_from_app_server_thread(thread: Thread) -> Option<Row> {
     Some(Row {
         path: thread.path,
         preview: if preview.is_empty() {
-            String::from("(no message yet)")
+            String::from(EMPTY_THREAD_PREVIEW)
         } else {
             preview.to_string()
         },
@@ -3308,6 +3348,19 @@ mod tests {
         };
 
         assert_eq!(row.display_preview(), "My session");
+    }
+
+    #[test]
+    fn session_target_name_falls_back_to_preview_for_unnamed_threads() {
+        let thread_id = ThreadId::new();
+        let target = SessionTarget::new(
+            /*path*/ None,
+            thread_id,
+            Some(String::from("New thread")),
+            Some("first message"),
+        );
+
+        assert_eq!(target.display_name, Some(String::from("first message")));
     }
 
     #[test]
@@ -5670,7 +5723,11 @@ session_picker_view = "dense"
             Some(SessionSelection::Resume(SessionTarget {
                 path: None,
                 thread_id: selected_thread_id,
-            })) => assert_eq!(selected_thread_id, thread_id),
+                display_name,
+            })) => {
+                assert_eq!(selected_thread_id, thread_id);
+                assert_eq!(display_name, Some(String::from("pathless thread")));
+            }
             other => panic!("unexpected selection: {other:?}"),
         }
     }

@@ -10,7 +10,7 @@ use crate::session_resume::read_session_model;
 const REDESIGN_NEW_CHAT_LABEL: &str = "New Chat";
 const LEGACY_UNNAMED_THREAD_LABEL: &str = "New thread";
 
-fn redesign_display_thread_name(thread_name: Option<&str>) -> Option<String> {
+pub(super) fn redesign_display_thread_name(thread_name: Option<&str>) -> Option<String> {
     let thread_name = crate::legacy_core::util::normalize_thread_name(thread_name?)?;
     (thread_name != LEGACY_UNNAMED_THREAD_LABEL).then_some(thread_name)
 }
@@ -183,34 +183,6 @@ impl App {
         self.agent_navigation
             .transcript_agent_label(self.current_displayed_thread_id(), self.primary_thread_id)
             .unwrap_or_else(|| "Codex".to_string())
-    }
-
-    pub(super) fn existing_redesign_new_chat_thread_id(&self) -> Option<ThreadId> {
-        let current_thread_id = self.current_displayed_thread_id();
-        if current_thread_id
-            .is_some_and(|thread_id| self.redesign_thread_is_open_new_chat(thread_id))
-        {
-            return current_thread_id;
-        }
-
-        self.agent_navigation
-            .ordered_threads()
-            .into_iter()
-            .find_map(|(thread_id, _)| {
-                self.redesign_thread_is_open_new_chat(thread_id)
-                    .then_some(thread_id)
-            })
-    }
-
-    fn redesign_thread_is_open_new_chat(&self, thread_id: ThreadId) -> bool {
-        if self
-            .agent_navigation
-            .get(&thread_id)
-            .is_some_and(|entry| entry.is_closed)
-        {
-            return false;
-        }
-        self.thread_label(thread_id) == REDESIGN_NEW_CHAT_LABEL
     }
 
     pub(crate) fn redesign_chat_entries(&self) -> Vec<redesign_chrome::RedesignChatListEntry> {
