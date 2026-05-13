@@ -2,21 +2,21 @@ use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 
-pub(crate) const BACKGROUND: Color = Color::Black;
+pub(crate) const BACKGROUND: Color = Color::Reset;
 pub(crate) const ERROR: Color = Color::Red;
 pub(crate) const ON_BACKGROUND: Color = Color::Reset;
 pub(crate) const ON_SECONDARY_CONTAINER: Color = Color::Black;
 pub(crate) const ON_SURFACE_VARIANT: Color = Color::Gray;
 pub(crate) const OUTLINE: Color = Color::Gray;
-pub(crate) const OUTLINE_VARIANT: Color = Color::DarkGray;
+pub(crate) const OUTLINE_VARIANT: Color = Color::Gray;
 pub(crate) const PRIMARY: Color = Color::Magenta;
 pub(crate) const PRIMARY_CONTAINER: Color = Color::Magenta;
 pub(crate) const SECONDARY: Color = Color::Reset;
 pub(crate) const SECONDARY_CONTAINER: Color = Color::Cyan;
 pub(crate) const SECONDARY_FIXED: Color = Color::Cyan;
-pub(crate) const SURFACE_CONTAINER_HIGHEST: Color = Color::DarkGray;
-pub(crate) const SURFACE_CONTAINER_LOW: Color = Color::DarkGray;
-pub(crate) const SURFACE_CONTAINER_LOWEST: Color = Color::Black;
+pub(crate) const SURFACE_CONTAINER_HIGHEST: Color = Color::Reset;
+pub(crate) const SURFACE_CONTAINER_LOW: Color = Color::Reset;
+pub(crate) const SURFACE_CONTAINER_LOWEST: Color = Color::Reset;
 pub(crate) const TERTIARY: Color = Color::Green;
 pub(crate) const TERTIARY_FIXED: Color = Color::Green;
 

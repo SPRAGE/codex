@@ -58,7 +58,6 @@ const COMPOSER_CHROME_ROWS: u16 = COMPOSER_TOP_RULE_ROWS + COMPOSER_BOTTOM_RULE_
 const COMPOSER_ROWS: u16 = COMPOSER_CHROME_ROWS + 1;
 const COMPOSER_LABEL: &str = "MSG> ";
 const COMPOSER_PLACEHOLDER: &str = "Describe the next change...";
-const COMPOSER_INPUT_BG: Color = Color::DarkGray;
 const MESSAGE_QUEUE_MAX_ROWS: usize = 4;
 const MESSAGE_QUEUE_MESSAGE_LINE_LIMIT: usize = 2;
 
@@ -359,7 +358,7 @@ fn layout_for(area: Rect, app: &App, legacy_bottom_pane: bool) -> RedesignLayout
 }
 
 fn render_background(area: Rect, buf: &mut Buffer) {
-    buf.set_style(area, Style::default().bg(Color::Black));
+    buf.set_style(area, Style::default().bg(Color::Reset));
 }
 
 fn render_plan_window_from_app(area: Rect, buf: &mut Buffer, app: &App) {
@@ -1064,7 +1063,7 @@ fn render_composer(
 
     let input_y = area.y.saturating_add(COMPOSER_TOP_RULE_ROWS);
     let input_area = Rect::new(area.x, input_y, area.width, input_height);
-    buf.set_style(input_area, Style::default().bg(COMPOSER_INPUT_BG));
+    buf.set_style(input_area, Style::default().bg(Color::Reset));
     let prefix_width = composer_prefix_width();
     let lines = composer_input_lines(area.width, draft);
     let (cursor_line_idx, cursor_width) =
@@ -2395,7 +2394,7 @@ mod tests {
     }
 
     #[test]
-    fn composer_input_area_uses_distinct_background() {
+    fn composer_input_area_uses_terminal_background() {
         let mut terminal =
             Terminal::new(TestBackend::new(/*width*/ 24, /*height*/ 4)).expect("terminal");
         terminal
@@ -2407,10 +2406,10 @@ mod tests {
             .expect("draw");
 
         let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(0, 0)].bg, Color::Black);
-        assert_eq!(buffer[(0, 1)].bg, COMPOSER_INPUT_BG);
-        assert_eq!(buffer[(0, 2)].bg, COMPOSER_INPUT_BG);
-        assert_eq!(buffer[(0, 3)].bg, Color::Black);
+        assert_eq!(buffer[(0, 0)].bg, Color::Reset);
+        assert_eq!(buffer[(0, 1)].bg, Color::Reset);
+        assert_eq!(buffer[(0, 2)].bg, Color::Reset);
+        assert_eq!(buffer[(0, 3)].bg, Color::Reset);
     }
 
     #[tokio::test]
