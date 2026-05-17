@@ -49,6 +49,8 @@ pub enum SlashCommand {
     Title,
     Statusline,
     Theme,
+    #[strum(to_string = "pets", serialize = "pet")]
+    Pets,
     Mcp,
     Apps,
     Plugins,
@@ -100,6 +102,7 @@ impl SlashCommand {
             SlashCommand::Title => "configure which items appear in the terminal title",
             SlashCommand::Statusline => "configure which items appear in the status line",
             SlashCommand::Theme => "choose a syntax highlighting theme",
+            SlashCommand::Pets => "choose or hide the terminal pet",
             SlashCommand::Ps => "list background terminals",
             SlashCommand::Stop => "stop all background terminals",
             SlashCommand::MemoryDrop => "DO NOT USE",
@@ -154,6 +157,7 @@ impl SlashCommand {
                 | SlashCommand::Mcp
                 | SlashCommand::Raw
                 | SlashCommand::PersistentSkill
+                | SlashCommand::Pets
                 | SlashCommand::Side
                 | SlashCommand::Resume
                 | SlashCommand::SandboxReadRoot
@@ -226,7 +230,7 @@ impl SlashCommand {
             SlashCommand::Settings => true,
             SlashCommand::Collab => true,
             SlashCommand::Agent | SlashCommand::MultiAgents => true,
-            SlashCommand::Theme => false,
+            SlashCommand::Theme | SlashCommand::Pets => false,
         }
     }
 
@@ -263,6 +267,12 @@ mod tests {
     #[test]
     fn clean_alias_parses_to_stop_command() {
         assert_eq!(SlashCommand::from_str("clean"), Ok(SlashCommand::Stop));
+    }
+
+    #[test]
+    fn pet_alias_parses_to_pets_command() {
+        assert_eq!(SlashCommand::Pets.command(), "pets");
+        assert_eq!(SlashCommand::from_str("pet"), Ok(SlashCommand::Pets));
     }
 
     #[test]

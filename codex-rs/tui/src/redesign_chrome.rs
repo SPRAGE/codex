@@ -91,7 +91,7 @@ impl RedesignChromeContext {
             .permissions
             .active_permission_profile()
             .map(|profile| profile.id)
-            .unwrap_or_else(|| permission_profile_label(&permission_profile).to_string());
+            .unwrap_or_else(|| permission_profile_label(permission_profile).to_string());
         let approval = format!(
             "{}/{}",
             config.permissions.approval_policy.get(),
@@ -399,8 +399,8 @@ fn render_plan_window_from_app(area: Rect, buf: &mut Buffer, app: &App) {
 }
 
 fn plan_window_rect(area: Rect) -> Option<Rect> {
-    let width = area.width.saturating_sub(4).min(72).max(24);
-    let height = area.height.saturating_sub(4).min(16).max(6);
+    let width = area.width.saturating_sub(4).clamp(24, 72);
+    let height = area.height.saturating_sub(4).clamp(6, 16);
     if width > area.width || height > area.height {
         return None;
     }
@@ -2166,6 +2166,7 @@ mod tests {
                 permission_profile: PermissionProfile::read_only(),
                 active_permission_profile: None,
                 cwd: app.config.cwd.clone(),
+                runtime_workspace_roots: Vec::new(),
                 instruction_source_paths: Vec::new(),
                 reasoning_effort: Some(ReasoningEffortConfig::default()),
                 message_history: None,

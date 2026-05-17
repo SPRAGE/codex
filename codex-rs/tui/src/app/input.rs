@@ -28,6 +28,9 @@ pub(super) enum RedesignCtrlCAction {
 
 const REDESIGN_LINE_SCROLL: usize = 3;
 
+const SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE: &str =
+    "Editing previous prompts is unavailable in side conversations.";
+
 pub(super) fn redesign_ctrl_c_action(
     event: &TuiEvent,
     composer_is_empty: bool,
@@ -330,6 +333,8 @@ impl App {
             // Esc so the active UI (e.g. status indicator, modals, popups) handles it.
             if self.should_handle_backtrack_esc(key_event) {
                 self.handle_backtrack_esc_key(tui);
+            } else if self.should_reject_side_backtrack_esc(key_event) {
+                self.reject_side_backtrack_esc();
             } else {
                 self.chat_widget.handle_key_event(key_event);
             }
@@ -388,6 +393,7 @@ impl App {
 
     pub(super) fn should_handle_backtrack_esc(&self, key_event: KeyEvent) -> bool {
         !self.redesign_chrome_enabled
+            && !self.chat_widget.side_conversation_active()
             && self.chat_widget.is_normal_backtrack_mode()
             && self.chat_widget.composer_is_empty()
             && !self.chat_widget.should_handle_vim_insert_escape(key_event)
@@ -663,6 +669,19 @@ impl App {
         }
     }
 
+    pub(super) fn should_reject_side_backtrack_esc(&self, key_event: KeyEvent) -> bool {
+        self.chat_widget.side_conversation_active()
+            && self.chat_widget.is_normal_backtrack_mode()
+            && self.chat_widget.composer_is_empty()
+            && !self.chat_widget.should_handle_vim_insert_escape(key_event)
+    }
+
+    pub(super) fn reject_side_backtrack_esc(&mut self) {
+        self.reset_backtrack_state();
+        self.chat_widget
+            .add_error_message(SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE.to_string());
+    }
+
     fn app_keymap_shortcuts_available(&self) -> bool {
         self.overlay.is_none() && self.chat_widget.no_modal_or_popup_active()
     }
@@ -807,6 +826,7 @@ mod tests {
             permission_profile: PermissionProfile::read_only(),
             active_permission_profile: None,
             cwd: app.config.cwd.clone(),
+            runtime_workspace_roots: Vec::new(),
             instruction_source_paths: Vec::new(),
             reasoning_effort: Some(ReasoningEffortConfig::default()),
             message_history: None,
