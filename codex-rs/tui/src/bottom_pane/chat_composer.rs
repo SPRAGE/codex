@@ -7211,6 +7211,35 @@ mod tests {
         }
     }
 
+    #[test]
+    fn ctrl_enter_inserts_newline_without_submitting() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.draft.textarea.insert_str("hello");
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL));
+
+        assert!(matches!(result, InputResult::None));
+        assert!(needs_redraw);
+        assert_eq!(composer.draft.textarea.text(), "hello\n");
+        assert_eq!(
+            composer.draft.textarea.cursor(),
+            composer.draft.textarea.text().len()
+        );
+    }
+
     /// Behavior: a large explicit paste inserts a placeholder into the textarea, stores the full
     /// content in `pending_pastes`, and expands the placeholder to the full content on submit.
     #[test]
@@ -9078,6 +9107,36 @@ mod tests {
         let (_result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         assert!(composer.draft.textarea.is_empty());
+        assert_eq!(
+            composer.draft.textarea.cursor(),
+            composer.draft.textarea.text().len()
+        );
+    }
+
+    #[test]
+    fn ctrl_up_recalls_last_submission() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        type_chars_humanlike(&mut composer, &['f', 'i', 'r', 's', 't']);
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(result, InputResult::Submitted { .. }));
+        assert!(composer.draft.textarea.is_empty());
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::CONTROL));
+
+        assert!(matches!(result, InputResult::None));
+        assert!(needs_redraw);
+        assert_eq!(composer.draft.textarea.text(), "first");
         assert_eq!(
             composer.draft.textarea.cursor(),
             composer.draft.textarea.text().len()

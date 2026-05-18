@@ -1236,6 +1236,11 @@ See the Codex keymap documentation for supported actions and examples."
                     let pasted = pasted.replace("\r", "\n");
                     self.chat_widget.handle_paste(pasted);
                 }
+                TuiEvent::Mouse(mouse_event) => {
+                    if self.handle_mouse_event(mouse_event, tui.terminal.viewport_area) {
+                        tui.frame_requester().schedule_frame();
+                    }
+                }
                 TuiEvent::Draw | TuiEvent::Resize => {
                     if self.backtrack_render_pending {
                         self.backtrack_render_pending = false;

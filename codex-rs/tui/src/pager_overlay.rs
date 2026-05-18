@@ -33,6 +33,8 @@ use crate::tui;
 use crate::tui::TuiEvent;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::MouseEvent;
+use crossterm::event::MouseEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::buffer::Cell;
 use ratatui::layout::Rect;
@@ -46,6 +48,8 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
+
+const MOUSE_WHEEL_SCROLL_LINES: usize = 3;
 
 pub(crate) enum Overlay {
     Transcript(TranscriptOverlay),
@@ -286,6 +290,25 @@ impl PagerView {
         tui.frame_requester()
             .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
         Ok(())
+    }
+
+    fn handle_mouse_event(&mut self, tui: &mut tui::Tui, mouse_event: MouseEvent) {
+        match mouse_event.kind {
+            MouseEventKind::ScrollUp => {
+                self.scroll_offset = self.scroll_offset.saturating_sub(MOUSE_WHEEL_SCROLL_LINES);
+            }
+            MouseEventKind::ScrollDown => {
+                self.scroll_offset = self.scroll_offset.saturating_add(MOUSE_WHEEL_SCROLL_LINES);
+            }
+            MouseEventKind::Down(_)
+            | MouseEventKind::Up(_)
+            | MouseEventKind::Drag(_)
+            | MouseEventKind::Moved
+            | MouseEventKind::ScrollLeft
+            | MouseEventKind::ScrollRight => return,
+        }
+        tui.frame_requester()
+            .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
     }
 
     /// Returns the height of one page in content rows.
@@ -771,6 +794,10 @@ impl TranscriptOverlay {
                 })?;
                 Ok(())
             }
+            TuiEvent::Mouse(mouse_event) => {
+                self.view.handle_mouse_event(tui, mouse_event);
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -872,6 +899,10 @@ impl StaticOverlay {
                 tui.draw(u16::MAX, |frame| {
                     self.render(frame.area(), frame.buffer);
                 })?;
+                Ok(())
+            }
+            TuiEvent::Mouse(mouse_event) => {
+                self.view.handle_mouse_event(tui, mouse_event);
                 Ok(())
             }
             _ => Ok(()),

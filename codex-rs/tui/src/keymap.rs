@@ -696,13 +696,18 @@ impl RuntimeKeymap {
                 insert_newline: default_bindings![
                     ctrl(KeyCode::Char('j')),
                     ctrl(KeyCode::Char('m')),
+                    ctrl(KeyCode::Enter),
                     plain(KeyCode::Enter),
                     shift(KeyCode::Enter),
                     alt(KeyCode::Enter)
                 ],
                 move_left: default_bindings![plain(KeyCode::Left), ctrl(KeyCode::Char('b'))],
                 move_right: default_bindings![plain(KeyCode::Right), ctrl(KeyCode::Char('f'))],
-                move_up: default_bindings![plain(KeyCode::Up), ctrl(KeyCode::Char('p'))],
+                move_up: default_bindings![
+                    plain(KeyCode::Up),
+                    ctrl(KeyCode::Char('p')),
+                    ctrl(KeyCode::Up)
+                ],
                 move_down: default_bindings![plain(KeyCode::Down), ctrl(KeyCode::Char('n'))],
                 move_word_left: default_bindings![
                     alt(KeyCode::Char('b')),
@@ -1814,6 +1819,14 @@ mod tests {
             runtime.composer.history_search_next,
             vec![key_hint::ctrl(KeyCode::Char('s'))]
         );
+        assert_eq!(
+            runtime.editor.move_up,
+            vec![
+                key_hint::plain(KeyCode::Up),
+                key_hint::ctrl(KeyCode::Char('p')),
+                key_hint::ctrl(KeyCode::Up),
+            ]
+        );
         assert_eq!(runtime.editor.kill_whole_line, Vec::new());
     }
 
@@ -2269,6 +2282,7 @@ mod tests {
             vec![
                 key_hint::ctrl(KeyCode::Char('j')),
                 key_hint::ctrl(KeyCode::Char('m')),
+                key_hint::ctrl(KeyCode::Enter),
                 key_hint::plain(KeyCode::Enter),
                 key_hint::shift(KeyCode::Enter),
                 key_hint::alt(KeyCode::Enter),

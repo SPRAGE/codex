@@ -26,6 +26,7 @@ use std::task::Context;
 use std::task::Poll;
 
 use crossterm::event::Event;
+use crossterm::event::MouseEventKind;
 use tokio::sync::broadcast;
 use tokio::sync::watch;
 use tokio_stream::Stream;
@@ -172,11 +173,11 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
 
     /// Poll the shared crossterm stream for the next mapped `TuiEvent`.
     ///
-    /// This skips events we don't use (mouse events, etc.) and keeps polling until it yields
-    /// a mapped event, hits `Pending`, or sees EOF/error. When the broker is paused, it drops
-    /// the underlying stream and returns `Pending` to fully release stdin.
+    /// This skips events we don't use (focus lost, non-wheel mouse events, etc.) and keeps polling
+    /// until it yields a mapped event, hits `Pending`, or sees EOF/error. When the broker is
+    /// paused, it drops the underlying stream and returns `Pending` to fully release stdin.
     pub fn poll_crossterm_event(&mut self, cx: &mut Context<'_>) -> Poll<Option<TuiEvent>> {
-        // Some crossterm events map to None (e.g. FocusLost, mouse); loop so we keep polling
+        // Some crossterm events map to None (e.g. FocusLost, non-wheel mouse); loop so we keep polling
         // until we return a mapped event, hit Pending, or see EOF/error.
         loop {
             let poll_result = {
@@ -233,7 +234,7 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
         }
     }
 
-    /// Map a crossterm event to a [`TuiEvent`], skipping events we don't use (mouse events, etc.).
+    /// Map a crossterm event to a [`TuiEvent`], skipping events we don't use.
     fn map_crossterm_event(&mut self, event: Event) -> Option<TuiEvent> {
         match event {
             Event::Key(key_event) => {
@@ -246,6 +247,17 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
             }
             Event::Resize(_, _) => Some(TuiEvent::Resize),
             Event::Paste(pasted) => Some(TuiEvent::Paste(pasted)),
+            Event::Mouse(mouse_event)
+                if matches!(
+                    mouse_event.kind,
+                    MouseEventKind::ScrollUp
+                        | MouseEventKind::ScrollDown
+                        | MouseEventKind::ScrollLeft
+                        | MouseEventKind::ScrollRight
+                ) =>
+            {
+                Some(TuiEvent::Mouse(mouse_event))
+            }
             Event::FocusGained => {
                 self.terminal_focused.store(true, Ordering::Relaxed);
                 crate::terminal_palette::requery_default_colors();
@@ -460,6 +472,23 @@ mod tests {
 
         let next = stream.next().await;
         assert!(matches!(next, Some(TuiEvent::Resize)));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mouse_wheel_event_maps_to_mouse() {
+        let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        let mut stream = make_stream(broker, draw_rx, terminal_focused);
+        let mouse_event = crossterm::event::MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 7,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        handle.send(Ok(Event::Mouse(mouse_event)));
+
+        let next = stream.next().await;
+        assert!(matches!(next, Some(TuiEvent::Mouse(event)) if event == mouse_event));
     }
 
     #[tokio::test(flavor = "current_thread")]

@@ -18,9 +18,12 @@ use crossterm::SynchronizedUpdate;
 use crossterm::cursor::SetCursorStyle;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableFocusChange;
+use crossterm::event::DisableMouseCapture;
 use crossterm::event::EnableBracketedPaste;
 use crossterm::event::EnableFocusChange;
+use crossterm::event::EnableMouseCapture;
 use crossterm::event::KeyEvent;
+use crossterm::event::MouseEvent;
 use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
 #[cfg(not(unix))]
@@ -239,7 +242,7 @@ fn restore_common(
         KeyboardRestore::ResetAfterExit => keyboard_modes::reset_keyboard_reporting_after_exit(),
     }
 
-    let mut first_error = execute!(stdout(), DisableBracketedPaste).err();
+    let mut first_error = execute!(stdout(), DisableBracketedPaste, DisableMouseCapture).err();
     let _ = execute!(stdout(), DisableFocusChange);
     if matches!(raw_mode_restore, RawModeRestore::Disable)
         && let Err(err) = disable_raw_mode()
@@ -412,6 +415,8 @@ pub enum TuiEvent {
     Key(KeyEvent),
     /// A bracketed paste payload normalized by the app layer before it reaches the composer.
     Paste(String),
+    /// A terminal mouse event captured while Codex owns an alternate-screen UI.
+    Mouse(MouseEvent),
     /// A terminal size notification that should be handled as resize-sensitive draw work.
     ///
     /// Resize is separate from `Draw` so the app can run feature-gated pre-render logic without
@@ -621,20 +626,29 @@ impl Tui {
         if !self.alt_screen_enabled {
             return Ok(());
         }
-        let _ = execute!(self.terminal.backend_mut(), EnterAlternateScreen);
-        // Enable "alternate scroll" so terminals may translate wheel to arrows
-        let _ = execute!(self.terminal.backend_mut(), EnableAlternateScroll);
-        if let Ok(size) = self.terminal.size() {
+        if !self.is_alt_screen_active() {
+            execute!(self.terminal.backend_mut(), EnterAlternateScreen)?;
             self.alt_saved_viewport = Some(self.terminal.viewport_area);
+            self.alt_screen_active.store(true, Ordering::Relaxed);
+        }
+        // Enable mouse capture so wheel gestures belong to Codex instead of the parent scrollback.
+        let _ = execute!(
+            self.terminal.backend_mut(),
+            EnableAlternateScroll,
+            EnableMouseCapture
+        );
+        if let Ok(size) = self.terminal.size() {
             self.terminal.set_viewport_area(ratatui::layout::Rect::new(
                 0,
                 0,
                 size.width,
                 size.height,
             ));
-            let _ = self.terminal.clear();
+            if let Err(err) = self.terminal.clear_visible_screen() {
+                tracing::warn!(error = %err, "failed to clear alternate screen on entry");
+                let _ = self.terminal.clear();
+            }
         }
-        self.alt_screen_active.store(true, Ordering::Relaxed);
         Ok(())
     }
 
@@ -643,8 +657,15 @@ impl Tui {
         if !self.alt_screen_enabled {
             return Ok(());
         }
-        // Disable alternate scroll when leaving alt-screen
-        let _ = execute!(self.terminal.backend_mut(), DisableAlternateScroll);
+        if !self.is_alt_screen_active() {
+            return Ok(());
+        }
+        // Disable mouse capture and alternate scroll when leaving alt-screen.
+        let _ = execute!(
+            self.terminal.backend_mut(),
+            DisableMouseCapture,
+            DisableAlternateScroll
+        );
         let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
         if let Some(saved) = self.alt_saved_viewport.take() {
             self.terminal.set_viewport_area(saved);

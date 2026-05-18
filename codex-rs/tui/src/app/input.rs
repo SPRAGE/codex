@@ -4,6 +4,8 @@
 //! entry, Ctrl-L clear, external editor launch, and agent navigation shortcuts.
 
 use super::*;
+use crossterm::event::MouseEvent;
+use crossterm::event::MouseEventKind;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RedesignShortcutAction {
@@ -399,6 +401,16 @@ impl App {
             && !self.chat_widget.should_handle_vim_insert_escape(key_event)
     }
 
+    pub(super) fn handle_mouse_event(
+        &mut self,
+        mouse_event: MouseEvent,
+        viewport_area: ratatui::layout::Rect,
+    ) -> bool {
+        self.redesign_chrome_enabled
+            && self.app_keymap_shortcuts_available()
+            && self.handle_redesign_transcript_scroll_mouse(mouse_event, viewport_area)
+    }
+
     fn handle_redesign_shortcut_key(
         &mut self,
         key_event: KeyEvent,
@@ -561,6 +573,40 @@ impl App {
             }
             _ => None,
         }
+    }
+
+    fn handle_redesign_transcript_scroll_mouse(
+        &mut self,
+        mouse_event: MouseEvent,
+        viewport_area: ratatui::layout::Rect,
+    ) -> bool {
+        if !self.chat_widget.composer_text_with_pending().is_empty() {
+            return false;
+        }
+
+        let previous_scroll = self.redesign_transcript_scroll;
+        let scroll_limit = redesign_chrome::transcript_scroll_limit(viewport_area, self);
+        match mouse_event.kind {
+            MouseEventKind::ScrollUp => {
+                self.redesign_transcript_scroll = self
+                    .redesign_transcript_scroll
+                    .saturating_add(REDESIGN_LINE_SCROLL)
+                    .min(scroll_limit);
+            }
+            MouseEventKind::ScrollDown => {
+                self.redesign_transcript_scroll = self
+                    .redesign_transcript_scroll
+                    .saturating_sub(REDESIGN_LINE_SCROLL)
+                    .min(scroll_limit);
+            }
+            MouseEventKind::Down(_)
+            | MouseEventKind::Up(_)
+            | MouseEventKind::Drag(_)
+            | MouseEventKind::Moved
+            | MouseEventKind::ScrollLeft
+            | MouseEventKind::ScrollRight => {}
+        }
+        self.redesign_transcript_scroll != previous_scroll
     }
 
     fn handle_redesign_sidebar_key(
@@ -788,6 +834,8 @@ mod tests {
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyModifiers;
+    use crossterm::event::MouseEvent;
+    use crossterm::event::MouseEventKind;
     use ratatui::layout::Rect;
     use std::sync::Arc;
 
@@ -797,6 +845,18 @@ mod tests {
 
     fn handle_redesign_key(app: &mut App, key_event: KeyEvent) -> RedesignShortcutAction {
         app.handle_redesign_shortcut_key(key_event, redesign_viewport())
+    }
+
+    fn handle_redesign_mouse(app: &mut App, kind: MouseEventKind) -> bool {
+        app.handle_mouse_event(
+            MouseEvent {
+                kind,
+                column: 1,
+                row: 1,
+                modifiers: KeyModifiers::NONE,
+            },
+            redesign_viewport(),
+        )
     }
 
     fn populate_scrollable_transcript(app: &mut App) {
@@ -1297,6 +1357,45 @@ mod tests {
         assert_eq!(action, RedesignShortcutAction::Redraw);
         assert_eq!(app.chat_widget.composer_text_with_pending(), "");
         assert_eq!(app.redesign_transcript_scroll, REDESIGN_LINE_SCROLL);
+    }
+
+    #[tokio::test]
+    async fn redesign_ctrl_up_stays_with_composer_history() {
+        let mut app = make_test_app().await;
+        app.redesign_chrome_enabled = true;
+        populate_scrollable_transcript(&mut app);
+
+        let action =
+            handle_redesign_key(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::CONTROL));
+
+        assert_eq!(action, RedesignShortcutAction::None);
+        assert_eq!(app.redesign_transcript_scroll, 0);
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "");
+    }
+
+    #[tokio::test]
+    async fn redesign_mouse_wheel_scrolls_transcript() {
+        let mut app = make_test_app().await;
+        app.redesign_chrome_enabled = true;
+        populate_scrollable_transcript(&mut app);
+
+        assert!(handle_redesign_mouse(&mut app, MouseEventKind::ScrollUp));
+        assert_eq!(app.redesign_transcript_scroll, REDESIGN_LINE_SCROLL);
+
+        assert!(handle_redesign_mouse(&mut app, MouseEventKind::ScrollDown));
+        assert_eq!(app.redesign_transcript_scroll, 0);
+    }
+
+    #[tokio::test]
+    async fn redesign_mouse_wheel_with_draft_stays_with_composer() {
+        let mut app = make_test_app().await;
+        app.redesign_chrome_enabled = true;
+        populate_scrollable_transcript(&mut app);
+        app.chat_widget.insert_str("draft");
+
+        assert!(!handle_redesign_mouse(&mut app, MouseEventKind::ScrollUp));
+        assert_eq!(app.redesign_transcript_scroll, 0);
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "draft");
     }
 
     #[tokio::test]
