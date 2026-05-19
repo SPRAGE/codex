@@ -191,6 +191,47 @@ impl StatusIndicatorWidget {
         self.elapsed_seconds_at(Instant::now())
     }
 
+    pub(crate) fn status_line(&self) -> Line<'static> {
+        self.status_line_at(Instant::now())
+    }
+
+    fn status_line_at(&self, now: Instant) -> Line<'static> {
+        let elapsed_duration = self.elapsed_duration_at(now);
+        let pretty_elapsed = fmt_elapsed_compact(elapsed_duration.as_secs());
+        let motion_mode = MotionMode::from_animations_enabled(self.animations_enabled);
+
+        let mut spans = Vec::with_capacity(5);
+        if let Some(indicator) = activity_indicator(
+            Some(self.last_resume_at),
+            motion_mode,
+            ReducedMotionIndicator::Hidden,
+        ) {
+            spans.push(indicator);
+            spans.push(" ".into());
+        }
+        spans.extend(shimmer_text(&self.header, motion_mode));
+        if !spans.is_empty() {
+            spans.push(" ".into());
+        }
+        if self.show_interrupt_hint {
+            spans.extend(vec![
+                format!("({pretty_elapsed} • ").dim(),
+                key_hint::plain(KeyCode::Esc).into(),
+                " to interrupt)".dim(),
+            ]);
+        } else {
+            spans.push(format!("({pretty_elapsed})").dim());
+        }
+        if let Some(message) = &self.inline_message {
+            // Keep optional context after elapsed/interrupt text so that core
+            // interrupt affordances stay in a fixed visual location.
+            spans.push(" · ".dim());
+            spans.push(message.clone().dim());
+        }
+
+        Line::from(spans)
+    }
+
     /// Wrap the details text into a fixed width and return the lines, truncating if necessary.
     fn wrapped_details_lines(&self, width: u16) -> Vec<Line<'static>> {
         let Some(details) = self.details.as_deref() else {
@@ -239,43 +280,9 @@ impl Renderable for StatusIndicatorWidget {
             self.frame_requester
                 .schedule_frame_in(Duration::from_millis(32));
         }
-        let now = Instant::now();
-        let elapsed_duration = self.elapsed_duration_at(now);
-        let pretty_elapsed = fmt_elapsed_compact(elapsed_duration.as_secs());
-        let motion_mode = MotionMode::from_animations_enabled(self.animations_enabled);
-
-        let mut spans = Vec::with_capacity(5);
-        if let Some(indicator) = activity_indicator(
-            Some(self.last_resume_at),
-            motion_mode,
-            ReducedMotionIndicator::Hidden,
-        ) {
-            spans.push(indicator);
-            spans.push(" ".into());
-        }
-        spans.extend(shimmer_text(&self.header, motion_mode));
-        if !spans.is_empty() {
-            spans.push(" ".into());
-        }
-        if self.show_interrupt_hint {
-            spans.extend(vec![
-                format!("({pretty_elapsed} • ").dim(),
-                key_hint::plain(KeyCode::Esc).into(),
-                " to interrupt)".dim(),
-            ]);
-        } else {
-            spans.push(format!("({pretty_elapsed})").dim());
-        }
-        if let Some(message) = &self.inline_message {
-            // Keep optional context after elapsed/interrupt text so that core
-            // interrupt affordances stay in a fixed visual location.
-            spans.push(" · ".dim());
-            spans.push(message.clone().dim());
-        }
-
         let mut lines = Vec::new();
         lines.push(truncate_line_with_ellipsis_if_overflow(
-            Line::from(spans),
+            self.status_line(),
             usize::from(area.width),
         ));
         if area.height > 1 {

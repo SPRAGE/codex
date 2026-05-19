@@ -428,6 +428,11 @@ impl App {
         self.redesign_chat_names.clear();
         self.redesign_chat_activity.clear();
         self.redesign_chat_unread.clear();
+        self.redesign_plan_window_open_threads.clear();
+        self.redesign_terminal_window_open_threads.clear();
+        self.redesign_terminal_window_scroll.clear();
+        self.redesign_terminal_window_selected.clear();
+        self.redesign_terminal_window_expanded.clear();
         self.pending_redesign_chat_notifications.clear();
         self.redesign_transcript_scroll = 0;
         self.active_thread_id = None;

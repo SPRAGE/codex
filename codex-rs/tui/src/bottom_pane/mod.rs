@@ -950,6 +950,10 @@ impl BottomPane {
         self.status.is_some()
     }
 
+    pub(crate) fn status_indicator_line(&self) -> Option<Line<'static>> {
+        self.status.as_ref().map(StatusIndicatorWidget::status_line)
+    }
+
     #[cfg(test)]
     pub(crate) fn status_line_text(&self) -> Option<String> {
         self.composer.status_line_text()

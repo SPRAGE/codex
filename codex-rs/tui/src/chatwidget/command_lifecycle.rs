@@ -4,6 +4,11 @@
 //! exec-cell grouping and unified exec wait state.
 
 use super::*;
+use crate::terminal_display_sanitize::sanitize_terminal_display_text;
+
+const MAX_RECENT_UNIFIED_EXEC_PROCESSES: usize = 20;
+const MAX_RECENT_CHUNKS: usize = 3;
+const MAX_OUTPUT_LINES: usize = 200;
 
 impl ChatWidget {
     pub(super) fn flush_unified_exec_wait_streak(&mut self) {
@@ -52,8 +57,12 @@ impl ChatWidget {
     }
 
     pub(super) fn on_exec_command_output_delta(&mut self, call_id: &str, delta: &str) {
-        self.track_unified_exec_output_chunk(call_id, delta.as_bytes());
+        let tracked_unified_output =
+            self.track_unified_exec_output_chunk(call_id, delta.as_bytes());
         if !self.bottom_pane.is_task_running() {
+            if tracked_unified_output {
+                self.request_redraw();
+            }
             return;
         }
 
@@ -63,11 +72,16 @@ impl ChatWidget {
             .as_mut()
             .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
         else {
+            if tracked_unified_output {
+                self.request_redraw();
+            }
             return;
         };
 
         if cell.append_output(call_id, delta) {
             self.bump_active_cell_revision();
+            self.request_redraw();
+        } else if tracked_unified_output {
             self.request_redraw();
         }
     }
@@ -132,6 +146,9 @@ impl ChatWidget {
             id,
             process_id,
             source,
+            status,
+            aggregated_output,
+            exit_code,
             ..
         } = &item
         else {
@@ -146,7 +163,13 @@ impl ChatWidget {
             {
                 self.flush_unified_exec_wait_streak();
             }
-            self.track_unified_exec_process_end(id, process_id.as_deref());
+            self.track_unified_exec_process_end(
+                id,
+                process_id.as_deref(),
+                status.clone(),
+                *exit_code,
+                aggregated_output.as_deref(),
+            );
             if !self.bottom_pane.is_task_running() {
                 return;
             }
@@ -166,7 +189,9 @@ impl ChatWidget {
     ) {
         let key = process_id.unwrap_or(call_id).to_string();
         let command = split_command_string(command);
-        let command_display = strip_bash_lc_and_escape(&command);
+        let command_display = sanitize_terminal_display_text(&strip_bash_lc_and_escape(&command));
+        self.recent_unified_exec_processes
+            .retain(|process| process.key != key);
         if let Some(existing) = self
             .unified_exec_processes
             .iter_mut()
@@ -175,28 +200,76 @@ impl ChatWidget {
             existing.call_id = call_id.to_string();
             existing.command_display = command_display;
             existing.recent_chunks.clear();
+            existing.output_lines.clear();
+            existing.status = RedesignBackgroundTerminalStatus::Running;
+            existing.exit_code = None;
         } else {
             self.unified_exec_processes.push(UnifiedExecProcessSummary {
                 key,
                 call_id: call_id.to_string(),
                 command_display,
                 recent_chunks: Vec::new(),
+                output_lines: Vec::new(),
+                status: RedesignBackgroundTerminalStatus::Running,
+                exit_code: None,
             });
         }
         self.sync_unified_exec_footer();
+        self.request_redraw();
     }
 
     pub(super) fn track_unified_exec_process_end(
         &mut self,
         call_id: &str,
         process_id: Option<&str>,
+        status: codex_app_server_protocol::CommandExecutionStatus,
+        exit_code: Option<i32>,
+        aggregated_output: Option<&str>,
     ) {
         let key = process_id.unwrap_or(call_id);
-        let before = self.unified_exec_processes.len();
-        self.unified_exec_processes
-            .retain(|process| process.key != key);
-        if self.unified_exec_processes.len() != before {
-            self.sync_unified_exec_footer();
+        let Some(idx) = self
+            .unified_exec_processes
+            .iter()
+            .position(|process| process.key == key)
+        else {
+            return;
+        };
+
+        let mut process = self.unified_exec_processes.remove(idx);
+        process.status = match status {
+            codex_app_server_protocol::CommandExecutionStatus::InProgress => {
+                RedesignBackgroundTerminalStatus::Running
+            }
+            codex_app_server_protocol::CommandExecutionStatus::Completed => {
+                RedesignBackgroundTerminalStatus::Completed
+            }
+            codex_app_server_protocol::CommandExecutionStatus::Failed => {
+                RedesignBackgroundTerminalStatus::Failed
+            }
+            codex_app_server_protocol::CommandExecutionStatus::Declined => {
+                RedesignBackgroundTerminalStatus::Declined
+            }
+        };
+        process.exit_code = exit_code;
+        if process.output_lines.is_empty()
+            && let Some(output) = aggregated_output
+        {
+            append_unified_exec_output_text(&mut process, output);
+        }
+
+        self.push_recent_unified_exec_process(process);
+        self.sync_unified_exec_footer();
+        self.request_redraw();
+    }
+
+    fn push_recent_unified_exec_process(&mut self, process: UnifiedExecProcessSummary) {
+        self.recent_unified_exec_processes
+            .retain(|recent| recent.key != process.key);
+        self.recent_unified_exec_processes.push(process);
+        if self.recent_unified_exec_processes.len() > MAX_RECENT_UNIFIED_EXEC_PROCESSES {
+            let drop_count =
+                self.recent_unified_exec_processes.len() - MAX_RECENT_UNIFIED_EXEC_PROCESSES;
+            self.recent_unified_exec_processes.drain(0..drop_count);
         }
     }
 
@@ -209,30 +282,18 @@ impl ChatWidget {
         self.bottom_pane.set_unified_exec_processes(processes);
     }
 
-    /// Record recent stdout/stderr lines for the unified exec footer.
-    pub(super) fn track_unified_exec_output_chunk(&mut self, call_id: &str, chunk: &[u8]) {
+    /// Record stdout/stderr lines for the unified exec footer and redesign terminal window.
+    pub(super) fn track_unified_exec_output_chunk(&mut self, call_id: &str, chunk: &[u8]) -> bool {
         let Some(process) = self
             .unified_exec_processes
             .iter_mut()
             .find(|process| process.call_id == call_id)
         else {
-            return;
+            return false;
         };
 
         let text = String::from_utf8_lossy(chunk);
-        for line in text
-            .lines()
-            .map(str::trim_end)
-            .filter(|line| !line.is_empty())
-        {
-            process.recent_chunks.push(line.to_string());
-        }
-
-        const MAX_RECENT_CHUNKS: usize = 3;
-        if process.recent_chunks.len() > MAX_RECENT_CHUNKS {
-            let drop_count = process.recent_chunks.len() - MAX_RECENT_CHUNKS;
-            process.recent_chunks.drain(0..drop_count);
-        }
+        append_unified_exec_output_text(process, &text)
     }
 
     pub(crate) fn handle_command_execution_started_now(&mut self, item: ThreadItem) {
@@ -451,4 +512,31 @@ impl ChatWidget {
             self.maybe_send_next_queued_input();
         }
     }
+}
+
+fn append_unified_exec_output_text(process: &mut UnifiedExecProcessSummary, text: &str) -> bool {
+    let mut recorded_output = false;
+    for line in text
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| !line.is_empty())
+    {
+        let line = sanitize_terminal_display_text(line);
+        if line.trim().is_empty() {
+            continue;
+        }
+        recorded_output = true;
+        process.recent_chunks.push(line.clone());
+        process.output_lines.push(line);
+    }
+
+    if process.recent_chunks.len() > MAX_RECENT_CHUNKS {
+        let drop_count = process.recent_chunks.len() - MAX_RECENT_CHUNKS;
+        process.recent_chunks.drain(0..drop_count);
+    }
+    if process.output_lines.len() > MAX_OUTPUT_LINES {
+        let drop_count = process.output_lines.len() - MAX_OUTPUT_LINES;
+        process.output_lines.drain(0..drop_count);
+    }
+    recorded_output
 }

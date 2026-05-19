@@ -104,6 +104,11 @@ impl App {
         self.redesign_chat_activity.remove(&thread_id);
         self.redesign_chat_unread.remove(&thread_id);
         self.redesign_plan_window_open_threads.remove(&thread_id);
+        self.redesign_terminal_window_open_threads
+            .remove(&thread_id);
+        self.redesign_terminal_window_scroll.remove(&thread_id);
+        self.redesign_terminal_window_selected.remove(&thread_id);
+        self.redesign_terminal_window_expanded.remove(&thread_id);
 
         if self.active_thread_id == Some(thread_id) {
             self.active_thread_id = None;
@@ -154,6 +159,14 @@ mod tests {
         app.redesign_chat_unread.insert(active_thread_id);
         app.redesign_plan_window_open_threads
             .insert(active_thread_id);
+        app.redesign_terminal_window_open_threads
+            .insert(active_thread_id);
+        app.redesign_terminal_window_scroll
+            .insert(active_thread_id, 12);
+        app.redesign_terminal_window_selected
+            .insert(active_thread_id, 1);
+        app.redesign_terminal_window_expanded
+            .insert(active_thread_id, 1);
 
         app.remove_redesign_chat_local(active_thread_id).await;
 
@@ -171,6 +184,22 @@ mod tests {
         assert!(
             !app.redesign_plan_window_open_threads
                 .contains(&active_thread_id)
+        );
+        assert!(
+            !app.redesign_terminal_window_open_threads
+                .contains(&active_thread_id)
+        );
+        assert!(
+            !app.redesign_terminal_window_scroll
+                .contains_key(&active_thread_id)
+        );
+        assert!(
+            !app.redesign_terminal_window_selected
+                .contains_key(&active_thread_id)
+        );
+        assert!(
+            !app.redesign_terminal_window_expanded
+                .contains_key(&active_thread_id)
         );
     }
 }

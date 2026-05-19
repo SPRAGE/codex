@@ -571,6 +571,10 @@ pub(crate) struct App {
     pub(crate) redesign_transcript_scroll: usize,
     pub(crate) redesign_final_only_transcript: bool,
     redesign_plan_window_open_threads: HashSet<ThreadId>,
+    redesign_terminal_window_open_threads: HashSet<ThreadId>,
+    redesign_terminal_window_scroll: HashMap<ThreadId, usize>,
+    redesign_terminal_window_selected: HashMap<ThreadId, usize>,
+    redesign_terminal_window_expanded: HashMap<ThreadId, usize>,
     redesign_chat_names: HashMap<ThreadId, String>,
     redesign_chat_activity: HashMap<ThreadId, redesign_chrome::RedesignChatActivity>,
     redesign_chat_unread: HashSet<ThreadId>,
@@ -644,6 +648,9 @@ impl App {
             return;
         };
         if !self.redesign_plan_window_open_threads.remove(&thread_id) {
+            self.redesign_terminal_window_open_threads
+                .remove(&thread_id);
+            self.redesign_terminal_window_expanded.remove(&thread_id);
             self.redesign_plan_window_open_threads.insert(thread_id);
         }
     }
@@ -652,6 +659,131 @@ impl App {
         self.chat_widget
             .thread_id()
             .is_some_and(|thread_id| self.redesign_plan_window_open_threads.remove(&thread_id))
+    }
+
+    pub(crate) fn redesign_terminal_window_open_for_active_chat(&self) -> bool {
+        self.chat_widget.thread_id().is_some_and(|thread_id| {
+            self.redesign_terminal_window_open_threads
+                .contains(&thread_id)
+        })
+    }
+
+    pub(crate) fn toggle_redesign_terminal_window_for_active_chat(&mut self) {
+        let Some(thread_id) = self.chat_widget.thread_id() else {
+            return;
+        };
+        if self
+            .redesign_terminal_window_open_threads
+            .remove(&thread_id)
+        {
+            self.redesign_terminal_window_expanded.remove(&thread_id);
+            return;
+        }
+
+        self.redesign_plan_window_open_threads.remove(&thread_id);
+        self.redesign_terminal_window_open_threads.insert(thread_id);
+        self.redesign_terminal_window_scroll.insert(thread_id, 0);
+        self.redesign_terminal_window_selected.insert(thread_id, 0);
+        self.redesign_terminal_window_expanded.remove(&thread_id);
+    }
+
+    pub(crate) fn close_redesign_terminal_window_for_active_chat(&mut self) -> bool {
+        self.chat_widget.thread_id().is_some_and(|thread_id| {
+            let closed = self
+                .redesign_terminal_window_open_threads
+                .remove(&thread_id);
+            if closed {
+                self.redesign_terminal_window_expanded.remove(&thread_id);
+            }
+            closed
+        })
+    }
+
+    pub(crate) fn redesign_terminal_window_scroll_for_active_chat(&self) -> usize {
+        self.chat_widget
+            .thread_id()
+            .and_then(|thread_id| {
+                self.redesign_terminal_window_scroll
+                    .get(&thread_id)
+                    .copied()
+            })
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn set_redesign_terminal_window_scroll_for_active_chat(&mut self, scroll: usize) {
+        let Some(thread_id) = self.chat_widget.thread_id() else {
+            return;
+        };
+        self.redesign_terminal_window_scroll
+            .insert(thread_id, scroll);
+    }
+
+    pub(crate) fn redesign_terminal_window_selected_for_active_chat(
+        &self,
+        terminal_count: usize,
+    ) -> usize {
+        self.chat_widget
+            .thread_id()
+            .and_then(|thread_id| {
+                self.redesign_terminal_window_selected
+                    .get(&thread_id)
+                    .copied()
+            })
+            .unwrap_or(0)
+            .min(terminal_count.saturating_sub(1))
+    }
+
+    pub(crate) fn set_redesign_terminal_window_selected_for_active_chat(&mut self, idx: usize) {
+        let Some(thread_id) = self.chat_widget.thread_id() else {
+            return;
+        };
+        self.redesign_terminal_window_selected
+            .insert(thread_id, idx);
+        self.redesign_terminal_window_scroll.insert(thread_id, 0);
+    }
+
+    pub(crate) fn redesign_terminal_window_expanded_for_active_chat(
+        &self,
+        terminal_count: usize,
+    ) -> Option<usize> {
+        self.chat_widget.thread_id().and_then(|thread_id| {
+            self.redesign_terminal_window_expanded
+                .get(&thread_id)
+                .copied()
+                .filter(|idx| *idx < terminal_count)
+        })
+    }
+
+    pub(crate) fn expand_selected_redesign_terminal_for_active_chat(
+        &mut self,
+        terminal_count: usize,
+    ) -> bool {
+        if terminal_count == 0 {
+            return false;
+        }
+        let Some(thread_id) = self.chat_widget.thread_id() else {
+            return false;
+        };
+        let selected = self
+            .redesign_terminal_window_selected
+            .get(&thread_id)
+            .copied()
+            .unwrap_or(0)
+            .min(terminal_count.saturating_sub(1));
+        self.redesign_terminal_window_selected
+            .insert(thread_id, selected);
+        self.redesign_terminal_window_expanded
+            .insert(thread_id, selected);
+        self.redesign_terminal_window_scroll.insert(thread_id, 0);
+        true
+    }
+
+    pub(crate) fn collapse_redesign_terminal_output_for_active_chat(&mut self) -> bool {
+        self.chat_widget.thread_id().is_some_and(|thread_id| {
+            self.redesign_terminal_window_expanded
+                .remove(&thread_id)
+                .is_some()
+        })
     }
 
     pub fn chatwidget_init_for_forked_or_resumed_thread(
@@ -1008,6 +1140,10 @@ See the Codex keymap documentation for supported actions and examples."
             redesign_transcript_scroll: 0,
             redesign_final_only_transcript: false,
             redesign_plan_window_open_threads: HashSet::new(),
+            redesign_terminal_window_open_threads: HashSet::new(),
+            redesign_terminal_window_scroll: HashMap::new(),
+            redesign_terminal_window_selected: HashMap::new(),
+            redesign_terminal_window_expanded: HashMap::new(),
             redesign_chat_names: HashMap::new(),
             redesign_chat_activity: HashMap::new(),
             redesign_chat_unread: HashSet::new(),

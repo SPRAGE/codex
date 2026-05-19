@@ -19,6 +19,8 @@ enum RedesignShortcutAction {
     StartNewChat,
     TogglePlanWindow,
     ClosePlanWindow,
+    ToggleTerminalWindow,
+    CloseTerminalWindow,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -277,6 +279,17 @@ impl App {
                 tui.frame_requester().schedule_frame();
                 return;
             }
+            RedesignShortcutAction::ToggleTerminalWindow => {
+                self.redesign_sidebar_state.blur();
+                self.toggle_redesign_terminal_window_for_active_chat();
+                tui.frame_requester().schedule_frame();
+                return;
+            }
+            RedesignShortcutAction::CloseTerminalWindow => {
+                self.close_redesign_terminal_window_for_active_chat();
+                tui.frame_requester().schedule_frame();
+                return;
+            }
         }
 
         let app_keymap_shortcuts_available = self.app_keymap_shortcuts_available();
@@ -406,9 +419,14 @@ impl App {
         mouse_event: MouseEvent,
         viewport_area: ratatui::layout::Rect,
     ) -> bool {
-        self.redesign_chrome_enabled
-            && self.app_keymap_shortcuts_available()
-            && self.handle_redesign_transcript_scroll_mouse(mouse_event, viewport_area)
+        if !self.redesign_chrome_enabled || !self.app_keymap_shortcuts_available() {
+            return false;
+        }
+        if self.redesign_terminal_window_open_for_active_chat() {
+            self.handle_redesign_terminal_window_scroll_mouse(mouse_event, viewport_area)
+        } else {
+            self.handle_redesign_transcript_scroll_mouse(mouse_event, viewport_area)
+        }
     }
 
     fn handle_redesign_shortcut_key(
@@ -438,6 +456,19 @@ impl App {
             && matches!(key_event.code, KeyCode::Esc)
         {
             return RedesignShortcutAction::ClosePlanWindow;
+        }
+
+        if self.redesign_terminal_window_open_for_active_chat() {
+            if matches!(key_event.code, KeyCode::Esc) {
+                if self.collapse_redesign_terminal_output_for_active_chat() {
+                    return RedesignShortcutAction::Redraw;
+                }
+                return RedesignShortcutAction::CloseTerminalWindow;
+            }
+            if let Some(action) = self.handle_redesign_terminal_window_key(key_event, viewport_area)
+            {
+                return action;
+            }
         }
 
         if let Some(action) = self.handle_redesign_transcript_scroll_key(key_event, viewport_area) {
@@ -472,6 +503,9 @@ impl App {
             _ if redesign_plan_window_key_matches(key_event) => {
                 RedesignShortcutAction::TogglePlanWindow
             }
+            _ if redesign_terminal_window_key_matches(key_event) => {
+                RedesignShortcutAction::ToggleTerminalWindow
+            }
             _ if composer_empty && redesign_final_only_key_matches(key_event) => {
                 self.redesign_final_only_transcript = !self.redesign_final_only_transcript;
                 RedesignShortcutAction::Redraw
@@ -494,6 +528,146 @@ impl App {
             }
             _ => RedesignShortcutAction::None,
         }
+    }
+
+    fn handle_redesign_terminal_window_key(
+        &mut self,
+        key_event: KeyEvent,
+        viewport_area: ratatui::layout::Rect,
+    ) -> Option<RedesignShortcutAction> {
+        if !self.chat_widget.composer_text_with_pending().is_empty() {
+            return None;
+        }
+
+        let terminal_count = self.chat_widget.redesign_background_terminal_count();
+        if let Some(action) =
+            self.handle_redesign_terminal_window_selection_key(key_event, terminal_count)
+        {
+            return Some(action);
+        }
+
+        if self
+            .redesign_terminal_window_expanded_for_active_chat(terminal_count)
+            .is_none()
+        {
+            return None;
+        }
+
+        let scroll_limit =
+            redesign_chrome::background_terminal_window_scroll_limit(viewport_area, self);
+        let page_scroll = viewport_area
+            .height
+            .saturating_sub(6)
+            .max(REDESIGN_LINE_SCROLL as u16) as usize;
+        let current_scroll = self.redesign_terminal_window_scroll_for_active_chat();
+        let next_scroll = match key_event {
+            KeyEvent {
+                code: KeyCode::Up,
+                modifiers,
+                ..
+            } if !crate::key_hint::has_ctrl_or_alt(modifiers) => current_scroll
+                .saturating_add(REDESIGN_LINE_SCROLL)
+                .min(scroll_limit),
+            KeyEvent {
+                code: KeyCode::Down,
+                modifiers,
+                ..
+            } if !crate::key_hint::has_ctrl_or_alt(modifiers) => current_scroll
+                .saturating_sub(REDESIGN_LINE_SCROLL)
+                .min(scroll_limit),
+            KeyEvent {
+                code: KeyCode::PageUp,
+                modifiers,
+                ..
+            } if !crate::key_hint::has_ctrl_or_alt(modifiers) => {
+                current_scroll.saturating_add(page_scroll).min(scroll_limit)
+            }
+            KeyEvent {
+                code: KeyCode::PageDown,
+                modifiers,
+                ..
+            } if !crate::key_hint::has_ctrl_or_alt(modifiers) => {
+                current_scroll.saturating_sub(page_scroll).min(scroll_limit)
+            }
+            KeyEvent {
+                code: KeyCode::Home,
+                modifiers,
+                ..
+            } if !crate::key_hint::has_ctrl_or_alt(modifiers) => scroll_limit,
+            KeyEvent {
+                code: KeyCode::End,
+                modifiers,
+                ..
+            } if !crate::key_hint::has_ctrl_or_alt(modifiers) => 0,
+            _ => return None,
+        };
+
+        self.set_redesign_terminal_window_scroll_for_active_chat(next_scroll);
+        Some(RedesignShortcutAction::Redraw)
+    }
+
+    fn handle_redesign_terminal_window_selection_key(
+        &mut self,
+        key_event: KeyEvent,
+        terminal_count: usize,
+    ) -> Option<RedesignShortcutAction> {
+        if terminal_count == 0 {
+            return None;
+        }
+        if self
+            .redesign_terminal_window_expanded_for_active_chat(terminal_count)
+            .is_some()
+        {
+            return match key_event {
+                KeyEvent {
+                    code: KeyCode::Enter,
+                    modifiers,
+                    ..
+                } if !crate::key_hint::has_ctrl_or_alt(modifiers) => {
+                    self.expand_selected_redesign_terminal_for_active_chat(terminal_count);
+                    Some(RedesignShortcutAction::Redraw)
+                }
+                _ => None,
+            };
+        }
+
+        let selected = self.redesign_terminal_window_selected_for_active_chat(terminal_count);
+        let next = match key_event {
+            KeyEvent {
+                code: KeyCode::Enter,
+                modifiers,
+                ..
+            } if !crate::key_hint::has_ctrl_or_alt(modifiers) => {
+                self.expand_selected_redesign_terminal_for_active_chat(terminal_count);
+                return Some(RedesignShortcutAction::Redraw);
+            }
+            KeyEvent {
+                code: KeyCode::Up,
+                modifiers,
+                ..
+            } if !crate::key_hint::has_ctrl_or_alt(modifiers) => selected.saturating_sub(1),
+            KeyEvent {
+                code: KeyCode::Down,
+                modifiers,
+                ..
+            } if !crate::key_hint::has_ctrl_or_alt(modifiers) => selected
+                .saturating_add(1)
+                .min(terminal_count.saturating_sub(1)),
+            KeyEvent {
+                code: KeyCode::Home,
+                modifiers,
+                ..
+            } if !crate::key_hint::has_ctrl_or_alt(modifiers) => 0,
+            KeyEvent {
+                code: KeyCode::End,
+                modifiers,
+                ..
+            } if !crate::key_hint::has_ctrl_or_alt(modifiers) => terminal_count.saturating_sub(1),
+            _ => return None,
+        };
+
+        self.set_redesign_terminal_window_selected_for_active_chat(next);
+        Some(RedesignShortcutAction::Redraw)
     }
 
     fn handle_redesign_transcript_scroll_key(
@@ -609,6 +783,36 @@ impl App {
         self.redesign_transcript_scroll != previous_scroll
     }
 
+    fn handle_redesign_terminal_window_scroll_mouse(
+        &mut self,
+        mouse_event: MouseEvent,
+        viewport_area: ratatui::layout::Rect,
+    ) -> bool {
+        if !self.chat_widget.composer_text_with_pending().is_empty() {
+            return false;
+        }
+
+        let previous_scroll = self.redesign_terminal_window_scroll_for_active_chat();
+        let scroll_limit =
+            redesign_chrome::background_terminal_window_scroll_limit(viewport_area, self);
+        let next_scroll = match mouse_event.kind {
+            MouseEventKind::ScrollUp => previous_scroll
+                .saturating_add(REDESIGN_LINE_SCROLL)
+                .min(scroll_limit),
+            MouseEventKind::ScrollDown => previous_scroll
+                .saturating_sub(REDESIGN_LINE_SCROLL)
+                .min(scroll_limit),
+            MouseEventKind::Down(_)
+            | MouseEventKind::Up(_)
+            | MouseEventKind::Drag(_)
+            | MouseEventKind::Moved
+            | MouseEventKind::ScrollLeft
+            | MouseEventKind::ScrollRight => previous_scroll,
+        };
+        self.set_redesign_terminal_window_scroll_for_active_chat(next_scroll);
+        next_scroll != previous_scroll
+    }
+
     fn handle_redesign_sidebar_key(
         &mut self,
         key_event: KeyEvent,
@@ -710,6 +914,9 @@ impl App {
                 redesign_chrome::RedesignSidebarItem::Transcript,
             ) => RedesignShortcutAction::OpenTranscript,
             redesign_chrome::RedesignSidebarSelection::Action(
+                redesign_chrome::RedesignSidebarItem::Terminals,
+            ) => RedesignShortcutAction::ToggleTerminalWindow,
+            redesign_chrome::RedesignSidebarSelection::Action(
                 redesign_chrome::RedesignSidebarItem::Editor,
             ) => RedesignShortcutAction::OpenExternalEditor,
         }
@@ -798,6 +1005,12 @@ fn redesign_final_only_key_matches(key_event: KeyEvent) -> bool {
 
 fn redesign_plan_window_key_matches(key_event: KeyEvent) -> bool {
     matches!(key_event.code, KeyCode::Char('p' | 'P'))
+        && key_event.modifiers.contains(KeyModifiers::ALT)
+        && !key_event.modifiers.contains(KeyModifiers::CONTROL)
+}
+
+fn redesign_terminal_window_key_matches(key_event: KeyEvent) -> bool {
+    matches!(key_event.code, KeyCode::Char('t' | 'T'))
         && key_event.modifiers.contains(KeyModifiers::ALT)
         && !key_event.modifiers.contains(KeyModifiers::CONTROL)
 }
@@ -977,6 +1190,111 @@ mod tests {
         assert_eq!(action, RedesignShortcutAction::ClosePlanWindow);
         app.close_redesign_plan_window_for_active_chat();
         assert!(!app.redesign_plan_window_open_for_active_chat());
+    }
+
+    #[tokio::test]
+    async fn redesign_alt_t_toggles_terminal_window_for_current_chat() {
+        let mut app = make_test_app().await;
+        app.redesign_chrome_enabled = true;
+        seed_model_session(&mut app);
+
+        let action = handle_redesign_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('t'), KeyModifiers::ALT),
+        );
+
+        assert_eq!(action, RedesignShortcutAction::ToggleTerminalWindow);
+        app.toggle_redesign_terminal_window_for_active_chat();
+        assert!(app.redesign_terminal_window_open_for_active_chat());
+
+        let action = handle_redesign_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert_eq!(action, RedesignShortcutAction::CloseTerminalWindow);
+        app.close_redesign_terminal_window_for_active_chat();
+        assert!(!app.redesign_terminal_window_open_for_active_chat());
+    }
+
+    #[tokio::test]
+    async fn redesign_terminal_window_scroll_keys_do_not_scroll_transcript() {
+        let mut app = make_test_app().await;
+        app.redesign_chrome_enabled = true;
+        seed_model_session(&mut app);
+        populate_scrollable_transcript(&mut app);
+        app.chat_widget
+            .set_redesign_background_terminals_for_test(vec![
+                crate::chatwidget::RedesignBackgroundTerminal {
+                    command_display: "cargo test -p codex-tui".to_string(),
+                    output_lines: (0..30).map(|idx| format!("line {idx}")).collect(),
+                    status: crate::chatwidget::RedesignBackgroundTerminalStatus::Running,
+                    exit_code: None,
+                },
+            ]);
+        app.toggle_redesign_terminal_window_for_active_chat();
+        app.expand_selected_redesign_terminal_for_active_chat(
+            app.chat_widget.redesign_background_terminal_count(),
+        );
+
+        let action = handle_redesign_key(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+
+        assert_eq!(action, RedesignShortcutAction::Redraw);
+        assert_eq!(app.redesign_transcript_scroll, 0);
+        assert_eq!(
+            app.redesign_terminal_window_scroll_for_active_chat(),
+            REDESIGN_LINE_SCROLL
+        );
+    }
+
+    #[tokio::test]
+    async fn redesign_terminal_window_navigates_and_expands_one_output() {
+        let mut app = make_test_app().await;
+        app.redesign_chrome_enabled = true;
+        seed_model_session(&mut app);
+        app.chat_widget
+            .set_redesign_background_terminals_for_test(vec![
+                crate::chatwidget::RedesignBackgroundTerminal {
+                    command_display: "cargo test".to_string(),
+                    output_lines: vec!["test output".to_string()],
+                    status: crate::chatwidget::RedesignBackgroundTerminalStatus::Running,
+                    exit_code: None,
+                },
+                crate::chatwidget::RedesignBackgroundTerminal {
+                    command_display: "rg query".to_string(),
+                    output_lines: vec!["rg output".to_string()],
+                    status: crate::chatwidget::RedesignBackgroundTerminalStatus::Running,
+                    exit_code: None,
+                },
+            ]);
+        app.toggle_redesign_terminal_window_for_active_chat();
+
+        let action =
+            handle_redesign_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(action, RedesignShortcutAction::Redraw);
+        assert_eq!(
+            app.redesign_terminal_window_selected_for_active_chat(
+                app.chat_widget.redesign_background_terminal_count()
+            ),
+            1
+        );
+
+        let action =
+            handle_redesign_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(action, RedesignShortcutAction::Redraw);
+        assert_eq!(
+            app.redesign_terminal_window_expanded_for_active_chat(
+                app.chat_widget.redesign_background_terminal_count()
+            ),
+            Some(1)
+        );
+
+        let action = handle_redesign_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(action, RedesignShortcutAction::Redraw);
+        assert_eq!(
+            app.redesign_terminal_window_expanded_for_active_chat(
+                app.chat_widget.redesign_background_terminal_count()
+            ),
+            None
+        );
+        assert!(app.redesign_terminal_window_open_for_active_chat());
     }
 
     #[tokio::test]

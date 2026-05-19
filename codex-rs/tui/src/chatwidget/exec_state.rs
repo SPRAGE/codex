@@ -3,6 +3,7 @@
 use codex_app_server_protocol::CommandExecutionSource as ExecCommandSource;
 use codex_protocol::parse_command::ParsedCommand;
 
+use super::RedesignBackgroundTerminalStatus;
 use crate::exec_command::split_command_string;
 
 pub(super) struct RunningCommand {
@@ -11,11 +12,15 @@ pub(super) struct RunningCommand {
     pub(super) source: ExecCommandSource,
 }
 
+#[derive(Clone)]
 pub(super) struct UnifiedExecProcessSummary {
     pub(super) key: String,
     pub(super) call_id: String,
     pub(super) command_display: String,
     pub(super) recent_chunks: Vec<String>,
+    pub(super) output_lines: Vec<String>,
+    pub(super) status: RedesignBackgroundTerminalStatus,
+    pub(super) exit_code: Option<i32>,
 }
 
 pub(super) struct UnifiedExecWaitState {

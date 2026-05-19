@@ -1,11 +1,10 @@
 ---
 source: tui/src/redesign_chrome.rs
-assertion_line: 2467
 expression: terminal.backend().to_string()
 ---
 "CODEX_CLI dev                                                                                       "
 "----------------------------------------------------------------------------------------------------"
-" CHATS                 |ready  chat test-model medium  ctx 100% left  tokens in 0 / out 0 / total 0 "
+" CHATS                 |test-model medium ctx 100% tok 0 perm managed appv never...                 "
 " Alt-B focus           |--┌ Plan  Alt-P close ───────────────────────────────────────────────────┐--"
 "                       |MS│• Updated Plan                                                        │  "
 " No chats yet          |  │  └ Current implementation checklist                                  │  "
@@ -17,8 +16,8 @@ expression: terminal.backend().to_string()
 "  Alt-M  MODELS        |  │                                                                      │  "
 "  C-R    HISTORY       |  │                                                                      │  "
 "  C-T    TRANSCRIPT    |  │                                                                      │  "
+"  Alt-T  TERMINALS     |  │                                                                      │  "
 "  C-G    EDITOR        |  │                                                                      │  "
-"                       |  │                                                                      │  "
 "                       |  │                                                                      │  "
 "                       |  │                                                                      │  "
 "                       |  └──────────────────────────────────────────────────────────────────────┘  "
@@ -26,4 +25,4 @@ expression: terminal.backend().to_string()
 "                       |----------------------------------------------------------------------------"
 "                       |MSG> Describe the next change...                                            "
 "                       |----------------------------------------------------------------------------"
-"/tmp/project · unknown · -- · Plan chat  Alt-H help  Alt-W close  C-T transcript  C-C exit          "
+"/tmp/project · unknown · -- · Plan...  Alt-H help  Alt-T term  Alt-W close  C-T transcript  C-C exit"

@@ -1,0 +1,22 @@
+---
+source: tui/src/redesign_chrome/background_terminals.rs
+expression: terminal.backend().to_string()
+---
+"┌ Terminal Sessions  Enter view  Esc collapse/close ───────────────────────────┐"
+"│> [-] TERM 1 running  cargo test -p codex-tui                                 │"
+"│  │ running 3 tests                                                           │"
+"│    test redraw_updates_background_terminal_window ... ok                     │"
+"│    test keeps_terminal_output_bounded ... ok                                 │"
+"│                                                                              │"
+"│  [+] TERM 2 running  just fix -p codex-tui                                   │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+"                                                                                "
+"                                                                                "

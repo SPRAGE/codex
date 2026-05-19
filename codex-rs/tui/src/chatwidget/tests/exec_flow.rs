@@ -702,6 +702,9 @@ async fn unified_exec_wait_status_header_updates_on_late_command_display() {
         call_id: "call-1".to_string(),
         command_display: "sleep 5".to_string(),
         recent_chunks: Vec::new(),
+        output_lines: Vec::new(),
+        status: crate::chatwidget::RedesignBackgroundTerminalStatus::Running,
+        exit_code: None,
     });
 
     terminal_interaction(&mut chat, "call-1", "proc-1", "");
@@ -783,6 +786,75 @@ async fn unified_exec_empty_then_non_empty_snapshot() {
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
     assert_chatwidget_snapshot!("unified_exec_empty_then_non_empty_after", combined);
+}
+
+#[tokio::test]
+async fn unified_exec_output_is_available_to_redesign_terminal_window() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.on_task_started();
+    begin_unified_exec_startup(&mut chat, "call-output", "proc-output", "cargo test");
+
+    chat.on_exec_command_output_delta("call-output", "running tests\n");
+    chat.on_exec_command_output_delta("call-output", "test one ... ok\n");
+
+    assert_eq!(
+        chat.redesign_background_terminals(),
+        vec![crate::chatwidget::RedesignBackgroundTerminal {
+            command_display: "cargo test".to_string(),
+            output_lines: vec!["running tests".to_string(), "test one ... ok".to_string()],
+            status: crate::chatwidget::RedesignBackgroundTerminalStatus::Running,
+            exit_code: None,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn unified_exec_completed_output_remains_available_to_redesign_terminal_window() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.on_task_started();
+    let begin = begin_unified_exec_startup(&mut chat, "call-done", "proc-done", "pwd");
+
+    chat.on_exec_command_output_delta("call-done", "/tmp/project\n");
+    end_exec(&mut chat, begin, "/tmp/project\n", "", /*exit_code*/ 0);
+
+    assert!(chat.unified_exec_processes.is_empty());
+    assert_eq!(chat.redesign_background_terminal_count(), 1);
+    assert_eq!(
+        chat.redesign_background_terminals(),
+        vec![crate::chatwidget::RedesignBackgroundTerminal {
+            command_display: "pwd".to_string(),
+            output_lines: vec!["/tmp/project".to_string()],
+            status: crate::chatwidget::RedesignBackgroundTerminalStatus::Completed,
+            exit_code: Some(0),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn unified_exec_output_for_redesign_terminal_window_strips_terminal_controls() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.on_task_started();
+    begin_unified_exec_startup(
+        &mut chat,
+        "call-output-ansi",
+        "proc-output-ansi",
+        "\x1b]0;bad\x07cargo test",
+    );
+
+    chat.on_exec_command_output_delta(
+        "call-output-ansi",
+        "\x1b[2J\x1b[Hrunning \x1b[31mred\x1b[0m\rtests\n\x1bPqraw-sixel\x1b\\done\n",
+    );
+
+    assert_eq!(
+        chat.redesign_background_terminals(),
+        vec![crate::chatwidget::RedesignBackgroundTerminal {
+            command_display: "cargo test".to_string(),
+            output_lines: vec!["running red tests".to_string(), "done".to_string()],
+            status: crate::chatwidget::RedesignBackgroundTerminalStatus::Running,
+            exit_code: None,
+        }]
+    );
 }
 
 #[tokio::test]

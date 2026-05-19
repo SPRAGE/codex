@@ -1,11 +1,10 @@
 ---
 source: tui/src/redesign_chrome.rs
-assertion_line: 2305
 expression: "render_fixture(100, 24)"
 ---
 "CODEX_CLI dev                                                                                       "
 "----------------------------------------------------------------------------------------------------"
-" CHATS                 |⠋ working  chat gpt-5.4 xhigh  ctx 72% left  tokens in 1.2K / out 900 / t..."
+" CHATS                 |gpt-5.4 xhigh ctx 72% tok 2.25K perm works... appv auto-...                 "
 " Alt-B focus           |----------------------------------------------------------------------------"
 "                       |                                                                       You  "
 "• active Main [default]|                   ╭─────────────────────────────────────────────────────╮  "
@@ -19,11 +18,11 @@ expression: "render_fixture(100, 24)"
 "  Alt-M  MODELS        | │ keyboard shortcuts.                                 │                    "
 "  C-R    HISTORY       | ╰─────────────────────────────────────────────────────╯                    "
 "  C-T    TRANSCRIPT    |                                                                            "
+"  Alt-T  TERMINALS     |                                                                            "
 "  C-G    EDITOR        |                                                                            "
 "                       |                                                                            "
-"                       |                                                                            "
-"                       |                                                                            "
+"                       |⠋ Working (0s • esc to interrupt)                                           "
 "                       |----------------------------------------------------------------------------"
 "                       |MSG> Describe the next change...                                            "
 "                       |----------------------------------------------------------------------------"
-"~/codes/codex · redesign-tui · 3 files · Impro...  Alt-H help  Alt-W close  C-T transcript  C-C exit"
+"~/codes/codex · redesign-tui · 3 f...  Alt-H help  Alt-T term  Alt-W close  C-T transcript  C-C exit"

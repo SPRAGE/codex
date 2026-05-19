@@ -505,6 +505,22 @@ pub(crate) struct RedesignActiveCellDisplay {
     pub(crate) is_stream_continuation: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RedesignBackgroundTerminal {
+    pub(crate) command_display: String,
+    pub(crate) output_lines: Vec<String>,
+    pub(crate) status: RedesignBackgroundTerminalStatus,
+    pub(crate) exit_code: Option<i32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RedesignBackgroundTerminalStatus {
+    Running,
+    Completed,
+    Failed,
+    Declined,
+}
+
 /// Maintains the per-session UI state and interaction state machines for the chat screen.
 ///
 /// `ChatWidget` owns the state derived from the protocol event stream (history cells, streaming
@@ -571,6 +587,7 @@ pub(crate) struct ChatWidget {
     turn_lifecycle: TurnLifecycleState,
     task_complete_pending: bool,
     unified_exec_processes: Vec<UnifiedExecProcessSummary>,
+    recent_unified_exec_processes: Vec<UnifiedExecProcessSummary>,
     /// Tracks per-server MCP startup state while startup is in progress.
     ///
     /// The map is `Some(_)` from the first startup status update until the
@@ -1929,8 +1946,12 @@ impl ChatWidget {
     pub(crate) fn redesign_schedule_work_indicator_frame_if_needed(&self) {
         if self.config.animations && self.bottom_pane.is_task_running() {
             self.frame_requester
-                .schedule_frame_in(Duration::from_millis(100));
+                .schedule_frame_in(Duration::from_millis(32));
         }
+    }
+
+    pub(crate) fn redesign_work_status_line(&self) -> Option<Line<'static>> {
+        self.bottom_pane.status_indicator_line()
     }
 
     pub(crate) fn redesign_composer_text(&self) -> String {
@@ -1948,6 +1969,23 @@ impl ChatWidget {
             .into_iter()
             .chain(preview.queued_messages)
             .collect()
+    }
+
+    pub(crate) fn redesign_background_terminals(&self) -> Vec<RedesignBackgroundTerminal> {
+        self.unified_exec_processes
+            .iter()
+            .chain(self.recent_unified_exec_processes.iter().rev())
+            .map(|process| RedesignBackgroundTerminal {
+                command_display: process.command_display.clone(),
+                output_lines: process.output_lines.clone(),
+                status: process.status,
+                exit_code: process.exit_code,
+            })
+            .collect()
+    }
+
+    pub(crate) fn redesign_background_terminal_count(&self) -> usize {
+        self.unified_exec_processes.len() + self.recent_unified_exec_processes.len()
     }
 
     pub(crate) fn redesign_latest_plan_display_lines(
@@ -1976,6 +2014,28 @@ impl ChatWidget {
     #[cfg(test)]
     pub(crate) fn set_redesign_latest_proposed_plan_for_test(&mut self, plan_markdown: String) {
         self.transcript.latest_proposed_plan_markdown = Some(plan_markdown);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_redesign_background_terminals_for_test(
+        &mut self,
+        terminals: Vec<RedesignBackgroundTerminal>,
+    ) {
+        self.unified_exec_processes = terminals
+            .into_iter()
+            .enumerate()
+            .map(|(idx, terminal)| UnifiedExecProcessSummary {
+                key: format!("test-process-{idx}"),
+                call_id: format!("test-call-{idx}"),
+                command_display: terminal.command_display,
+                recent_chunks: Vec::new(),
+                output_lines: terminal.output_lines,
+                status: terminal.status,
+                exit_code: terminal.exit_code,
+            })
+            .collect();
+        self.recent_unified_exec_processes.clear();
+        self.sync_unified_exec_footer();
     }
 
     pub(crate) fn redesign_should_render_bottom_pane(&self) -> bool {

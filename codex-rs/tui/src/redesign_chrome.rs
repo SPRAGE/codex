@@ -36,6 +36,7 @@ use std::time::Instant;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
+mod background_terminals;
 mod layout;
 mod sidebar;
 
@@ -60,6 +61,7 @@ const COMPOSER_LABEL: &str = "MSG> ";
 const COMPOSER_PLACEHOLDER: &str = "Describe the next change...";
 const MESSAGE_QUEUE_MAX_ROWS: usize = 4;
 const MESSAGE_QUEUE_MESSAGE_LINE_LIMIT: usize = 2;
+const SYSTEM_RAIL_EVENT_LINE_LIMIT: usize = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct RedesignChromeContext {
@@ -79,6 +81,7 @@ pub(crate) struct RedesignChromeContext {
     working: bool,
     animations_enabled: bool,
     work_started_at: Option<Instant>,
+    work_status_line: Option<Line<'static>>,
     chats: Vec<RedesignChatListEntry>,
     final_only: bool,
 }
@@ -133,6 +136,7 @@ impl RedesignChromeContext {
             working: app.chat_widget.redesign_task_running(),
             animations_enabled: app.chat_widget.redesign_animations_enabled(),
             work_started_at: app.chat_widget.redesign_work_started_at(),
+            work_status_line: app.chat_widget.redesign_work_status_line(),
             chats: app.redesign_chat_entries(),
             final_only: app.redesign_final_only_transcript,
         }
@@ -163,6 +167,12 @@ impl RedesignChromeContext {
             working: true,
             animations_enabled: true,
             work_started_at: None,
+            work_status_line: Some(Line::from(vec![
+                "⠋".cyan(),
+                " ".into(),
+                "Working".into(),
+                " (0s • esc to interrupt)".dim(),
+            ])),
             chats: vec![
                 RedesignChatListEntry {
                     thread_id: codex_protocol::ThreadId::new(),
@@ -255,6 +265,7 @@ pub(crate) fn render_app(area: Rect, buf: &mut Buffer, app: &App) -> AppFrameRen
         app.chat_widget
             .render_redesign_bottom_pane(layout.composer, buf);
         render_plan_window_from_app(layout.main, buf, app);
+        render_background_terminal_window_from_app(layout.main, buf, app);
         return AppFrameRender {
             cursor_pos: app
                 .chat_widget
@@ -267,14 +278,17 @@ pub(crate) fn render_app(area: Rect, buf: &mut Buffer, app: &App) -> AppFrameRen
 
     let draft = app.chat_widget.redesign_composer_text();
     let queued_messages = app.chat_widget.redesign_queued_message_texts();
+    let work_status_line = composer_work_status_line(&context);
     let cursor_pos = render_composer(
         layout.composer,
         buf,
         &draft,
         app.chat_widget.redesign_composer_cursor(),
         &queued_messages,
+        work_status_line.as_ref(),
     );
     render_plan_window_from_app(layout.main, buf, app);
+    render_background_terminal_window_from_app(layout.main, buf, app);
     AppFrameRender {
         cursor_pos,
         cursor_style: SetCursorStyle::SteadyBar,
@@ -308,6 +322,21 @@ pub(crate) fn transcript_scroll_limit(area: Rect, app: &App) -> usize {
         &blocks,
         &assistant_label,
     )
+}
+
+pub(crate) fn background_terminal_window_scroll_limit(area: Rect, app: &App) -> usize {
+    if area.is_empty() {
+        return 0;
+    }
+    let layout = layout_for(
+        area,
+        app,
+        app.chat_widget.redesign_should_render_bottom_pane(),
+    );
+    let terminals = app.chat_widget.redesign_background_terminals();
+    let selected_idx = app.redesign_terminal_window_selected_for_active_chat(terminals.len());
+    let expanded_idx = app.redesign_terminal_window_expanded_for_active_chat(terminals.len());
+    background_terminals::scroll_limit(layout.main, &terminals, selected_idx, expanded_idx)
 }
 
 pub(crate) fn render_chrome(
@@ -348,7 +377,12 @@ fn layout_for(area: Rect, app: &App, legacy_bottom_pane: bool) -> RedesignLayout
     } else {
         let draft = app.chat_widget.redesign_composer_text();
         let queued_messages = app.chat_widget.redesign_queued_message_texts();
-        let desired_height = composer_desired_height(main_width, &draft, &queued_messages);
+        let desired_height = composer_desired_height(
+            main_width,
+            &draft,
+            &queued_messages,
+            app.chat_widget.redesign_task_running(),
+        );
         desired_height
             .min(available_chat_body_height)
             .max(COMPOSER_ROWS.min(available_chat_body_height))
@@ -398,6 +432,23 @@ fn render_plan_window_from_app(area: Rect, buf: &mut Buffer, app: &App) {
     Paragraph::new(lines).render(inner, buf);
 }
 
+fn render_background_terminal_window_from_app(area: Rect, buf: &mut Buffer, app: &App) {
+    if !app.redesign_terminal_window_open_for_active_chat() {
+        return;
+    }
+    let terminals = app.chat_widget.redesign_background_terminals();
+    let selected_idx = app.redesign_terminal_window_selected_for_active_chat(terminals.len());
+    let expanded_idx = app.redesign_terminal_window_expanded_for_active_chat(terminals.len());
+    background_terminals::render_window(
+        area,
+        buf,
+        &terminals,
+        selected_idx,
+        expanded_idx,
+        app.redesign_terminal_window_scroll_for_active_chat(),
+    );
+}
+
 fn plan_window_rect(area: Rect) -> Option<Rect> {
     let width = area.width.saturating_sub(4).clamp(24, 72);
     let height = area.height.saturating_sub(4).clamp(6, 16);
@@ -442,38 +493,55 @@ fn render_chat_bar(area: Rect, buf: &mut Buffer, context: &RedesignChromeContext
         return;
     }
 
-    let work_label = if context.working {
-        "working".green().bold()
-    } else {
-        "ready".dim()
-    };
-    let activity_indicator = work_activity_indicator(context);
     let mut spans = Vec::new();
-    if let Some(indicator) = activity_indicator {
-        spans.push(indicator);
-        spans.push(" ".into());
-    }
 
-    if area.width >= 72 {
+    if area.width >= 96 {
         spans.extend([
-            work_label,
-            "  ".into(),
-            "chat ".dim(),
             Span::from(format!("{} {}", context.model, context.reasoning)).magenta(),
-            "  ctx ".dim(),
-            Span::from(context.context_left.clone()),
-            "  tokens ".dim(),
-            Span::from(token_usage_label(&context.token_usage)).cyan(),
+            " ".into(),
+            "ctx ".dim(),
+            Span::from(compact_context_left_label(&context.context_left)),
+            " ".into(),
+            "tok ".dim(),
+            Span::from(format_tokens_compact(context.token_usage.total_tokens)).cyan(),
+            " ".into(),
+            "perm ".dim(),
+            Span::from(truncate_text(
+                &context.permissions,
+                permission_header_width(area.width),
+            ))
+            .cyan(),
+            " ".into(),
+            "appv ".dim(),
+            Span::from(truncate_text(
+                &context.approval,
+                approval_header_width(area.width),
+            ))
+            .magenta(),
+        ]);
+    } else if area.width >= 72 {
+        spans.extend([
+            Span::from(format!("{} {}", context.model, context.reasoning)).magenta(),
+            " ".into(),
+            "ctx ".dim(),
+            Span::from(compact_context_left_label(&context.context_left)),
+            " ".into(),
+            "tok ".dim(),
+            Span::from(format_tokens_compact(context.token_usage.total_tokens)).cyan(),
+            " ".into(),
+            "perm ".dim(),
+            Span::from(truncate_text(&context.permissions, 8)).cyan(),
+            " ".into(),
+            "appv ".dim(),
+            Span::from(truncate_text(&context.approval, 8)).magenta(),
         ]);
     } else {
         spans.extend([
-            work_label,
-            " | ".into(),
             Span::from(format!("{} {}", context.model, context.reasoning)).magenta(),
             " | ctx ".dim(),
-            Span::from(context.context_left.clone()),
+            Span::from(compact_context_left_label(&context.context_left)),
             " | tok ".dim(),
-            Span::from(token_usage_label(&context.token_usage)).cyan(),
+            Span::from(format_tokens_compact(context.token_usage.total_tokens)).cyan(),
         ]);
     }
     if let Some(pricing) = &context.pricing {
@@ -484,13 +552,22 @@ fn render_chat_bar(area: Rect, buf: &mut Buffer, context: &RedesignChromeContext
     render_line(area, buf, area.y, Line::from(spans));
 }
 
-fn token_usage_label(usage: &TokenUsage) -> String {
-    format!(
-        "in {} / out {} / total {}",
-        format_tokens_compact(usage.input_tokens),
-        format_tokens_compact(usage.output_tokens),
-        format_tokens_compact(usage.total_tokens)
-    )
+fn compact_context_left_label(context_left: &str) -> String {
+    let without_prefix = context_left
+        .strip_prefix("context ")
+        .unwrap_or(context_left);
+    without_prefix
+        .strip_suffix(" left")
+        .unwrap_or(without_prefix)
+        .to_string()
+}
+
+fn permission_header_width(area_width: u16) -> u16 {
+    if area_width >= 120 { 16 } else { 12 }
+}
+
+fn approval_header_width(area_width: u16) -> u16 {
+    if area_width >= 120 { 16 } else { 11 }
 }
 
 #[cfg(test)]
@@ -738,10 +815,10 @@ fn render_transcript_scrollbar(
 fn render_system_rail(
     area: Rect,
     buf: &mut Buffer,
-    context: &RedesignChromeContext,
+    _context: &RedesignChromeContext,
     blocks: &[SystemRailBlock],
 ) {
-    let Some((content, header, body_capacity)) = system_rail_frame(area, buf, context) else {
+    let Some((content, header, body_capacity)) = system_rail_frame(area, buf) else {
         return;
     };
     let body = system_rail_display_lines(blocks, content.width);
@@ -751,21 +828,17 @@ fn render_system_rail(
 fn render_system_rail_from_app(
     area: Rect,
     buf: &mut Buffer,
-    context: &RedesignChromeContext,
+    _context: &RedesignChromeContext,
     app: &App,
 ) {
-    let Some((content, header, body_capacity)) = system_rail_frame(area, buf, context) else {
+    let Some((content, header, body_capacity)) = system_rail_frame(area, buf) else {
         return;
     };
     let body = system_rail_tail_display_lines(app, content.width, body_capacity);
     render_system_rail_lines(content, header, body, body_capacity, buf);
 }
 
-fn system_rail_frame(
-    area: Rect,
-    buf: &mut Buffer,
-    context: &RedesignChromeContext,
-) -> Option<(Rect, Vec<Line<'static>>, usize)> {
+fn system_rail_frame(area: Rect, buf: &mut Buffer) -> Option<(Rect, Vec<Line<'static>>, usize)> {
     if area.is_empty() {
         return None;
     }
@@ -784,14 +857,9 @@ fn system_rail_frame(
         return None;
     }
 
-    let permissions = truncate_text(&context.permissions, content.width.saturating_sub(7));
-    let approval = truncate_text(&context.approval, content.width.saturating_sub(7));
     let header = vec![
-        Line::from(""),
-        Line::from(vec![" ".into(), "SYSTEM".cyan().bold()]),
-        Line::from(vec![" ".into(), "perm ".dim(), permissions.cyan()]),
-        Line::from(vec![" ".into(), "appv ".dim(), approval.magenta()]),
-        Line::from(vec![" ".into(), "details rail".dim()]),
+        Line::from(vec![" ".into(), "ACTIVITY".cyan().bold()]),
+        Line::from(vec![" ".into(), "latest messages".dim()]),
         Line::from(""),
     ];
     let body_capacity = content.height.saturating_sub(header.len() as u16) as usize;
@@ -813,26 +881,46 @@ fn render_system_rail_lines(
 
 fn system_rail_display_lines(blocks: &[SystemRailBlock], width: u16) -> Vec<Line<'static>> {
     if blocks.is_empty() {
-        return vec![Line::from(vec![" ".into(), "No system activity".dim()])];
+        return vec![Line::from(vec![" ".into(), "No activity yet".dim()])];
     }
 
-    let wrap_width = width.saturating_sub(3).max(1) as usize;
     let mut lines = Vec::new();
     for block in blocks {
-        if !lines.is_empty() {
-            lines.push(Line::from(""));
-        }
-        lines.push(Line::from(vec![" ".into(), block.title.cyan().bold()]));
-        for line in &block.lines {
-            for wrapped in
-                adaptive_wrap_lines(std::iter::once(line.clone()), RtOptions::new(wrap_width))
-            {
-                let mut spans = vec!["  ".dim()];
-                spans.extend(wrapped.spans);
-                lines.push(Line::from(spans));
+        lines.extend(system_rail_event_lines(block, width));
+    }
+    lines
+}
+
+fn system_rail_event_lines(block: &SystemRailBlock, width: u16) -> Vec<Line<'static>> {
+    let wrap_width = width.saturating_sub(4).max(1) as usize;
+    let mut lines = vec![Line::from(vec![
+        " ".into(),
+        "•".cyan(),
+        " ".into(),
+        block.title.cyan().bold(),
+    ])];
+    let mut rendered_content_lines = 0usize;
+    let mut truncated = false;
+
+    'content: for line in &block.lines {
+        for wrapped in
+            adaptive_wrap_lines(std::iter::once(line.clone()), RtOptions::new(wrap_width))
+        {
+            if rendered_content_lines >= SYSTEM_RAIL_EVENT_LINE_LIMIT {
+                truncated = true;
+                break 'content;
             }
+            let mut spans = vec!["   ".dim()];
+            spans.extend(wrapped.spans);
+            lines.push(Line::from(spans));
+            rendered_content_lines += 1;
         }
     }
+
+    if truncated {
+        lines.push(Line::from(vec!["   ".dim(), "...".dim()]));
+    }
+
     lines
 }
 
@@ -845,7 +933,7 @@ fn system_rail_tail_display_lines(
         return Vec::new();
     }
     if app.redesign_final_only_transcript {
-        return vec![Line::from(vec![" ".into(), "No system activity".dim()])];
+        return vec![Line::from(vec![" ".into(), "No activity yet".dim()])];
     }
 
     if body_capacity == 0 {
@@ -886,7 +974,7 @@ fn system_rail_tail_display_lines(
     }
 
     if blocks_rev.is_empty() {
-        return vec![Line::from(vec![" ".into(), "No system activity".dim()])];
+        return vec![Line::from(vec![" ".into(), "No activity yet".dim()])];
     }
     lines
 }
@@ -925,6 +1013,24 @@ fn work_activity_indicator(context: &RedesignChromeContext) -> Option<Span<'stat
     } else {
         None
     }
+}
+
+fn composer_work_status_line(context: &RedesignChromeContext) -> Option<Line<'static>> {
+    if !context.working {
+        return None;
+    }
+
+    if let Some(line) = &context.work_status_line {
+        return Some(line.clone());
+    }
+
+    let mut spans = Vec::new();
+    if let Some(indicator) = work_activity_indicator(context) {
+        spans.push(indicator);
+        spans.push(" ".into());
+    }
+    spans.push("Working".into());
+    Some(Line::from(spans))
 }
 
 fn message_queue_desired_height(width: u16, queued_messages: &[String]) -> u16 {
@@ -1030,24 +1136,43 @@ fn render_composer(
     draft: &str,
     draft_cursor: usize,
     queued_messages: &[String],
+    work_status_line: Option<&Line<'static>>,
 ) -> Option<(u16, u16)> {
     if area.is_empty() {
         return None;
     }
 
     let minimum_composer_height = COMPOSER_ROWS.min(area.height);
-    let queue_height = message_queue_desired_height(area.width, queued_messages)
+    let status_height = u16::from(work_status_line.is_some())
         .min(area.height.saturating_sub(minimum_composer_height));
+    let queue_height = message_queue_desired_height(area.width, queued_messages).min(
+        area.height
+            .saturating_sub(minimum_composer_height)
+            .saturating_sub(status_height),
+    );
     if queue_height > 0 {
         let queue_area = Rect::new(area.x, area.y, area.width, queue_height);
         render_message_queue(queue_area, buf, queued_messages);
     }
+    if status_height > 0
+        && let Some(line) = work_status_line
+    {
+        let status_area = Rect::new(
+            area.x,
+            area.y.saturating_add(queue_height),
+            area.width,
+            status_height,
+        );
+        render_work_status(status_area, buf, line);
+    }
 
     let area = Rect::new(
         area.x,
-        area.y.saturating_add(queue_height),
+        area.y
+            .saturating_add(queue_height)
+            .saturating_add(status_height),
         area.width,
-        area.height.saturating_sub(queue_height),
+        area.height.saturating_sub(queue_height + status_height),
     );
     if area.is_empty() {
         return None;
@@ -1096,6 +1221,13 @@ fn render_composer(
     Some((cursor_x, cursor_y))
 }
 
+fn render_work_status(area: Rect, buf: &mut Buffer, line: &Line<'static>) {
+    if area.is_empty() {
+        return;
+    }
+    render_line(area, buf, area.y, line.clone());
+}
+
 fn composer_cursor_line_and_width(
     width: u16,
     draft: &str,
@@ -1124,7 +1256,12 @@ fn composer_cursor_line_and_width(
     (line_count.saturating_sub(1), cursor_width)
 }
 
-fn composer_desired_height(width: u16, draft: &str, queued_messages: &[String]) -> u16 {
+fn composer_desired_height(
+    width: u16,
+    draft: &str,
+    queued_messages: &[String],
+    work_status_visible: bool,
+) -> u16 {
     if width == 0 {
         return 0;
     }
@@ -1133,6 +1270,7 @@ fn composer_desired_height(width: u16, draft: &str, queued_messages: &[String]) 
     let line_count =
         u16::try_from(composer_line_count(width, draft, prefix_width)).unwrap_or(u16::MAX);
     message_queue_desired_height(width, queued_messages)
+        .saturating_add(u16::from(work_status_visible))
         .saturating_add(COMPOSER_CHROME_ROWS)
         .saturating_add(line_count)
 }
@@ -1281,7 +1419,7 @@ fn render_footer(area: Rect, buf: &mut Buffer, context: &RedesignChromeContext) 
     }
 
     let line = if area.width >= 112 {
-        let hints = "  Alt-B side  Alt-H help  Alt-/ cmds  Alt-M model  Alt-P plan  Alt-W close  C-T transcript  C-C exit";
+        let hints = "  Alt-B side  Alt-H help  Alt-/ cmds  Alt-M model  Alt-P plan  Alt-T term  Alt-W close  C-T transcript  C-C exit";
         let workspace_width = area
             .width
             .saturating_sub(UnicodeWidthStr::width(hints) as u16);
@@ -1298,6 +1436,8 @@ fn render_footer(area: Rect, buf: &mut Buffer, context: &RedesignChromeContext) 
             " model".dim(),
             "  Alt-P".cyan(),
             " plan".dim(),
+            "  Alt-T".cyan(),
+            " term".dim(),
             "  Alt-W".cyan(),
             " close".dim(),
             "  C-T".cyan(),
@@ -1306,7 +1446,7 @@ fn render_footer(area: Rect, buf: &mut Buffer, context: &RedesignChromeContext) 
             " exit".dim(),
         ])
     } else if area.width >= 64 {
-        let hints = "  Alt-H help  Alt-W close  C-T transcript  C-C exit";
+        let hints = "  Alt-H help  Alt-T term  Alt-W close  C-T transcript  C-C exit";
         let workspace_width = area
             .width
             .saturating_sub(UnicodeWidthStr::width(hints) as u16);
@@ -1315,6 +1455,8 @@ fn render_footer(area: Rect, buf: &mut Buffer, context: &RedesignChromeContext) 
             Span::from(workspace).dim(),
             "  Alt-H".cyan(),
             " help".dim(),
+            "  Alt-T".cyan(),
+            " term".dim(),
             "  Alt-W".cyan(),
             " close".dim(),
             "  C-T".cyan(),
@@ -1751,13 +1893,20 @@ fn bubble_lines_with_assistant_label(
 ) -> Vec<Line<'static>> {
     let assistant_label = block.speaker_label.as_deref().unwrap_or(assistant_label);
     let viewport_width = area_width.saturating_sub(2).max(1) as usize;
-    let max_bubble_width = bubble_max_width(block.role, viewport_width);
-    let wrap_width = max_bubble_width.saturating_sub(4).max(1);
     let mut wrapped = Vec::new();
     let content_lines = reflow_bubble_prose_lines(&block.lines);
+    let contains_table_grid = content_lines.iter().any(is_prewrapped_table_grid_line);
+    let max_bubble_width = bubble_max_width(block.role, viewport_width);
+    let prose_wrap_width = max_bubble_width.saturating_sub(4).max(1);
+    let full_inner_width = viewport_width.saturating_sub(4).max(1);
+    let inner_width_limit = if contains_table_grid {
+        full_inner_width
+    } else {
+        prose_wrap_width
+    };
     let role_label = truncate_text(
         role_name(block.role, assistant_label),
-        wrap_width.min(u16::MAX as usize) as u16,
+        inner_width_limit.min(u16::MAX as usize) as u16,
     );
 
     for line in &content_lines {
@@ -1765,14 +1914,18 @@ fn bubble_lines_with_assistant_label(
             wrapped.push(Line::from(""));
             continue;
         }
+        if is_prewrapped_table_grid_line(line) && line_width(line) <= full_inner_width {
+            wrapped.push(line.clone());
+            continue;
+        }
         let line_text = plain_line_text(line);
         let trimmed = line_text.trim_start();
         let leading_width = UnicodeWidthStr::width(&line_text[..line_text.len() - trimmed.len()]);
         let wrap_options = if let Some(marker_width) = list_marker_width(trimmed) {
-            RtOptions::new(wrap_width)
+            RtOptions::new(prose_wrap_width)
                 .subsequent_indent(Line::from(" ".repeat(leading_width + marker_width)))
         } else {
-            RtOptions::new(wrap_width)
+            RtOptions::new(prose_wrap_width)
         };
         wrapped.extend(adaptive_wrap_lines(
             std::iter::once(line.clone()),
@@ -1789,7 +1942,7 @@ fn bubble_lines_with_assistant_label(
         .max()
         .unwrap_or(1)
         .max(UnicodeWidthStr::width(role_label.as_str()))
-        .min(wrap_width);
+        .min(inner_width_limit);
     let bubble_width = inner_width + 4;
     let prefix_width = bubble_prefix_width(block.role, viewport_width, bubble_width);
     let label_width = UnicodeWidthStr::width(role_label.as_str());
@@ -1928,6 +2081,7 @@ fn starts_bubble_prose_run(line: &Line<'_>) -> bool {
 
 fn is_structural_text_line(text: &str) -> bool {
     text.starts_with(['>', '|', '#'])
+        || is_prewrapped_table_grid_text(text)
         || text.starts_with("```")
         || text.starts_with("---")
         || text.starts_with("***")
@@ -1946,6 +2100,27 @@ fn list_marker_width(text: &str) -> Option<usize> {
     let marker = &text[..marker_end];
     (!marker.is_empty() && marker.chars().all(|ch| ch.is_ascii_digit()))
         .then_some(marker_end.saturating_add(2))
+}
+
+fn is_prewrapped_table_grid_line(line: &Line<'_>) -> bool {
+    let text = plain_line_text(line);
+    is_prewrapped_table_grid_text(text.trim_start())
+}
+
+fn is_prewrapped_table_grid_text(text: &str) -> bool {
+    let table_text = strip_blockquote_markers(text);
+    table_text.starts_with(['┌', '├', '└'])
+        || table_text.starts_with('│') && table_text.contains('│')
+}
+
+fn strip_blockquote_markers(mut text: &str) -> &str {
+    loop {
+        text = text.trim_start();
+        let Some(rest) = text.strip_prefix('>') else {
+            return text;
+        };
+        text = rest.strip_prefix(' ').unwrap_or(rest);
+    }
 }
 
 fn styled_bubble_content_spans(line: Line<'static>, bubble_style: Style) -> Vec<Span<'static>> {
@@ -2185,10 +2360,20 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 let context = RedesignChromeContext::fixture();
+                let work_status_line = composer_work_status_line(&context);
+                let side_width = side_width_for_state(area.width, sidebar);
+                let base_layout =
+                    layout_for_dimensions_with_side(area, side_width, COMPOSER_ROWS);
+                let composer_height = composer_desired_height(
+                    base_layout.composer.width,
+                    "",
+                    &[],
+                    work_status_line.is_some(),
+                );
                 let layout = layout_for_dimensions_with_side(
                     area,
-                    side_width_for_state(area.width, sidebar),
-                    COMPOSER_ROWS,
+                    side_width,
+                    composer_height,
                 );
                 let blocks = vec![
                     TranscriptBlock {
@@ -2234,6 +2419,7 @@ mod tests {
                     "",
                     /*draft_cursor*/ 0,
                     &[],
+                    work_status_line.as_ref(),
                 );
             })
             .expect("draw");
@@ -2279,6 +2465,7 @@ mod tests {
                     draft,
                     draft.len(),
                     queued_messages,
+                    None,
                 );
             })
             .expect("draw");
@@ -2297,7 +2484,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 render_background(area, frame.buffer_mut());
-                cursor = render_composer(area, frame.buffer_mut(), draft, draft_cursor, &[]);
+                cursor = render_composer(area, frame.buffer_mut(), draft, draft_cursor, &[], None);
             })
             .expect("draw");
         cursor.expect("cursor")
@@ -2340,7 +2527,12 @@ mod tests {
             "redesign_chrome_wrapped_composer_44x4",
             render_composer_fixture(
                 /*width*/ 44,
-                composer_desired_height(/*width*/ 44, draft, &[]),
+                composer_desired_height(
+                    /*width*/ 44,
+                    draft,
+                    &[],
+                    /*work_status_visible*/ false
+                ),
                 draft,
             )
         );
@@ -2356,7 +2548,12 @@ mod tests {
             "redesign_chrome_queued_messages_52x7",
             render_composer_fixture_with_queue(
                 /*width*/ 52,
-                composer_desired_height(/*width*/ 52, "", &queued_messages),
+                composer_desired_height(
+                    /*width*/ 52,
+                    "",
+                    &queued_messages,
+                    /*work_status_visible*/ false,
+                ),
                 "",
                 &queued_messages,
             )
@@ -2391,7 +2588,14 @@ mod tests {
     fn composer_height_grows_for_wrapped_draft() {
         let draft = "Please review the recently modified rendering code before shipping.";
 
-        assert!(composer_desired_height(/*width*/ 32, draft, &[]) > 3);
+        assert!(
+            composer_desired_height(
+                /*width*/ 32,
+                draft,
+                &[],
+                /*work_status_visible*/ false
+            ) > 3
+        );
     }
 
     #[test]
@@ -2402,7 +2606,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 render_background(area, frame.buffer_mut());
-                render_composer(area, frame.buffer_mut(), "draft", "draft".len(), &[]);
+                render_composer(area, frame.buffer_mut(), "draft", "draft".len(), &[], None);
             })
             .expect("draw");
 
@@ -2495,6 +2699,40 @@ mod tests {
         assert!(rendered.contains("Proposed Plan"));
         assert!(rendered.contains("Inspect plan sources"));
         assert!(rendered.contains("Render proposed plan fallback"));
+    }
+
+    #[tokio::test]
+    async fn terminal_window_renders_background_process_output_snapshot() {
+        let mut app = crate::app::test_support::make_test_app().await;
+        app.redesign_chrome_enabled = true;
+        seed_test_thread(&mut app);
+        app.chat_widget
+            .set_redesign_background_terminals_for_test(vec![
+                crate::chatwidget::RedesignBackgroundTerminal {
+                    command_display: "cargo test -p codex-tui".to_string(),
+                    output_lines: vec![
+                        "running 2 tests".to_string(),
+                        "test redraws_terminal_window ... ok".to_string(),
+                        "test keeps_history_tail ... ok".to_string(),
+                    ],
+                    status: crate::chatwidget::RedesignBackgroundTerminalStatus::Running,
+                    exit_code: None,
+                },
+            ]);
+        app.toggle_redesign_terminal_window_for_active_chat();
+
+        let mut terminal =
+            Terminal::new(TestBackend::new(/*width*/ 100, /*height*/ 24)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                render_app(frame.area(), frame.buffer_mut(), &app);
+            })
+            .expect("draw");
+
+        assert_snapshot!(
+            "redesign_chrome_terminal_window_100x24",
+            terminal.backend().to_string()
+        );
     }
 
     #[test]
@@ -2681,6 +2919,56 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn transcript_render_preserves_markdown_table_grid_rows() {
+        let mut app = crate::app::test_support::make_test_app().await;
+        let cwd = app.config.cwd.clone();
+        app.transcript_cells = vec![std::sync::Arc::new(history_cell::AgentMarkdownCell::new(
+            concat!(
+                "| Command | Result |\n",
+                "| --- | --- |\n",
+                "| cargo test -p codex-tui markdown table rendering regression | ",
+                "passed with focused table assertions |\n",
+            )
+            .to_string(),
+            cwd.as_path(),
+        ))];
+
+        let lines = transcript_display_window_from_app(
+            &app, /*width*/ 80, /*height*/ 18, /*route_system_cells_to_rail*/ true,
+            /*scroll_offset*/ 0, "Codex",
+        )
+        .lines
+        .iter()
+        .map(plain_line_text)
+        .collect::<Vec<_>>();
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains('┌') && line.contains('┐')),
+            "expected table top border to stay on one bubble line, got: {lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains('├') && line.contains('┤')),
+            "expected table separator border to stay on one bubble line, got: {lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains('└') && line.contains('┘')),
+            "expected table bottom border to stay on one bubble line, got: {lines:?}"
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains('┌') && !line.contains('┐')),
+            "table top border should not be split by bubble wrapping: {lines:?}"
+        );
+    }
+
     #[test]
     fn transcript_render_keeps_markdown_list_items_snapshot() {
         let mut terminal =
@@ -2724,20 +3012,6 @@ mod tests {
             } else {
                 format!("CODEX_CLI v{CODEX_CLI_VERSION}")
             }
-        );
-    }
-
-    #[test]
-    fn token_usage_label_shows_input_output_and_total() {
-        assert_eq!(
-            token_usage_label(&TokenUsage {
-                input_tokens: 12_345,
-                cached_input_tokens: 0,
-                output_tokens: 6_789,
-                reasoning_output_tokens: 345,
-                total_tokens: 19_134,
-            }),
-            "in 12.3K / out 6.79K / total 19.1K"
         );
     }
 

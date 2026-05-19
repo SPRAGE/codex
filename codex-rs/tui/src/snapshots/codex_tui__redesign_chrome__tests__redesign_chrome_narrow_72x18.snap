@@ -1,13 +1,11 @@
 ---
 source: tui/src/redesign_chrome.rs
-assertion_line: 2318
 expression: "render_fixture(72, 18)"
 ---
 "CODEX_CLI dev                                                           "
 "------------------------------------------------------------------------"
-"⠋ working  chat gpt-5.4 xhigh  ctx 72% left  tokens in 1.2K / out 900..."
+"gpt-5.4 xhigh ctx 72% tok 2.25K perm works... appv auto-...             "
 "------------------------------------------------------------------------"
-"                   ╭─────────────────────────────────────────────────╮ |"
 "                   │ Let's redesign the TUI to be more intuitive for │ |"
 "                   │ CLI users.                                      │ |"
 "                   ╰─────────────────────────────────────────────────╯ |"
@@ -17,7 +15,8 @@ expression: "render_fixture(72, 18)"
 " │ Agreed. I'll focus on information density and clear │               |"
 " │ keyboard shortcuts.                                 │               |"
 " ╰─────────────────────────────────────────────────────╯               #"
+"⠋ Working (0s • esc to interrupt)                                       "
 "------------------------------------------------------------------------"
 "MSG> Describe the next change...                                        "
 "------------------------------------------------------------------------"
-"~/codes/codex · re...  Alt-H help  Alt-W close  C-T transcript  C-C exit"
+"~/code...  Alt-H help  Alt-T term  Alt-W close  C-T transcript  C-C exit"

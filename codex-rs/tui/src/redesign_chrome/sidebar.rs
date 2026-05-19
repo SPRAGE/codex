@@ -114,17 +114,19 @@ pub(crate) enum RedesignSidebarItem {
     Models,
     History,
     Transcript,
+    Terminals,
     Editor,
 }
 
 impl RedesignSidebarItem {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::NewChat,
         Self::FinalOnly,
         Self::Commands,
         Self::Models,
         Self::History,
         Self::Transcript,
+        Self::Terminals,
         Self::Editor,
     ];
 
@@ -136,6 +138,7 @@ impl RedesignSidebarItem {
             Self::Models => "MODELS",
             Self::History => "HISTORY",
             Self::Transcript => "TRANSCRIPT",
+            Self::Terminals => "TERMINALS",
             Self::Editor => "EDITOR",
         }
     }
@@ -148,6 +151,7 @@ impl RedesignSidebarItem {
             Self::Models => "Alt-M",
             Self::History => "C-R",
             Self::Transcript => "C-T",
+            Self::Terminals => "Alt-T",
             Self::Editor => "C-G",
         }
     }

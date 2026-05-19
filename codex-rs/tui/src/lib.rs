@@ -176,6 +176,7 @@ mod status;
 mod status_indicator_widget;
 mod streaming;
 mod style;
+mod terminal_display_sanitize;
 mod terminal_palette;
 mod terminal_probe;
 mod terminal_title;
