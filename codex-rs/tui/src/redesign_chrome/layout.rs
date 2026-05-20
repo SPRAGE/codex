@@ -2,9 +2,8 @@ use ratatui::layout::Rect;
 
 use super::RedesignSidebarState;
 
-const TOP_ROWS: u16 = 2;
 const CHAT_SEPARATOR_ROWS: u16 = 1;
-const CHAT_HEADER_ROWS: u16 = 1;
+const CHAT_HEADER_ROWS: u16 = 2;
 const FOOTER_ROWS: u16 = 2;
 const WIDE_SIDE_WIDTH: u16 = 24;
 const RIGHT_RAIL_WIDTH: u16 = 30;
@@ -26,7 +25,7 @@ pub(super) struct RedesignLayout {
 }
 
 pub(super) fn available_chat_body_height(area: Rect) -> u16 {
-    let available_body_height = area.height.saturating_sub(TOP_ROWS + FOOTER_ROWS);
+    let available_body_height = area.height.saturating_sub(FOOTER_ROWS);
     available_body_height.saturating_sub(CHAT_SEPARATOR_ROWS + CHAT_HEADER_ROWS)
 }
 
@@ -58,7 +57,7 @@ pub(super) fn layout_for_dimensions_with_side(
         area.width,
         FOOTER_ROWS.min(area.height),
     );
-    let body_y = area.y.saturating_add(TOP_ROWS.min(area.height));
+    let body_y = area.y;
     let body_bottom = footer.y;
     let body_height = body_bottom.saturating_sub(body_y);
     let side = Rect::new(area.x, body_y, side_width, body_height);

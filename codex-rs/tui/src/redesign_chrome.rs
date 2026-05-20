@@ -13,6 +13,7 @@ use crate::motion::MotionMode;
 use crate::motion::ReducedMotionIndicator;
 use crate::motion::rotating_activity_indicator;
 use crate::status::format_directory_display;
+use crate::status::format_tokens_compact;
 use crate::token_usage::TokenUsage;
 use crate::version::CODEX_CLI_VERSION;
 use crate::wrapping::RtOptions;
@@ -349,9 +350,8 @@ pub(crate) fn render_chrome(
 
     let side_width = side_width_for_state(area.width, sidebar);
     let layout = layout_for_dimensions_with_side(area, side_width, COMPOSER_ROWS);
-    render_top_bar(area, buf, context);
-    render_top_separator(area, buf);
-    render_chat_bar(layout.chat_header, buf, context);
+    let inline_identity = (side_width == 0).then(|| product_version_label(&context.product));
+    render_chat_bar_with_identity(layout.chat_header, buf, context, inline_identity.as_deref());
     draw_horizontal_rule(layout.chat_separator, buf, layout.chat_separator.y);
     render_side_nav(layout.side, buf, context, sidebar);
     render_footer(layout.footer, buf, context);
@@ -458,20 +458,7 @@ fn plan_window_rect(area: Rect) -> Option<Rect> {
     })
 }
 
-fn render_top_bar(area: Rect, buf: &mut Buffer, context: &RedesignChromeContext) {
-    let line = Line::from(vec![
-        Span::from(product_version_label(&context.product))
-            .magenta()
-            .bold(),
-    ]);
-    render_line(area, buf, area.y, line);
-}
-
-fn render_top_separator(area: Rect, buf: &mut Buffer) {
-    draw_horizontal_rule(area, buf, area.y.saturating_add(1));
-}
-
-fn product_version_label(product: &str) -> String {
+pub(super) fn product_version_label(product: &str) -> String {
     if is_source_build_version_label(CODEX_CLI_VERSION) {
         format!("{product} dev")
     } else {
@@ -483,66 +470,70 @@ fn is_source_build_version_label(version: &str) -> bool {
     version.trim() == "0.0.0"
 }
 
+#[cfg(test)]
 fn render_chat_bar(area: Rect, buf: &mut Buffer, context: &RedesignChromeContext) {
+    render_chat_bar_with_identity(area, buf, context, None);
+}
+
+fn render_chat_bar_with_identity(
+    area: Rect,
+    buf: &mut Buffer,
+    context: &RedesignChromeContext,
+    identity: Option<&str>,
+) {
     if area.is_empty() {
         return;
     }
 
-    let mut spans = Vec::new();
+    let model = format!("{} {}", context.model, context.reasoning);
+    let context_left = compact_context_left_label(&context.context_left);
+    let token_usage = chat_header_token_usage_label(area.width, context);
 
-    if area.width >= 96 {
-        spans.extend([
-            Span::from(format!("{} {}", context.model, context.reasoning)).magenta(),
-            " ".into(),
-            "ctx ".dim(),
-            Span::from(compact_context_left_label(&context.context_left)),
-            " ".into(),
-            Span::from(context.token_usage.to_string()).cyan(),
-            " ".into(),
-            "perm ".dim(),
-            Span::from(truncate_text(
-                &context.permissions,
-                permission_header_width(area.width),
-            ))
-            .cyan(),
-            " ".into(),
-            "appv ".dim(),
-            Span::from(truncate_text(
-                &context.approval,
-                approval_header_width(area.width),
-            ))
-            .magenta(),
-        ]);
-    } else if area.width >= 72 {
-        spans.extend([
-            Span::from(format!("{} {}", context.model, context.reasoning)).magenta(),
-            " ".into(),
-            "ctx ".dim(),
-            Span::from(compact_context_left_label(&context.context_left)),
-            " ".into(),
-            Span::from(context.token_usage.to_string()).cyan(),
-            " ".into(),
-            "perm ".dim(),
-            Span::from(truncate_text(&context.permissions, 8)).cyan(),
-            " ".into(),
-            "appv ".dim(),
-            Span::from(truncate_text(&context.approval, 8)).magenta(),
-        ]);
-    } else {
-        spans.extend([
-            Span::from(format!("{} {}", context.model, context.reasoning)).magenta(),
-            " | ctx ".dim(),
-            Span::from(compact_context_left_label(&context.context_left)),
-            " | ".dim(),
-            Span::from(context.token_usage.to_string()).cyan(),
-        ]);
+    let mut primary_spans = Vec::new();
+    if let Some(identity) = identity {
+        primary_spans.push(Span::from(identity.to_string()).magenta().bold());
+        primary_spans.push("  ".into());
     }
+    push_chat_header_item(&mut primary_spans, "Model: ", model);
+    primary_spans.push(" ".into());
+    push_chat_header_item(&mut primary_spans, "ctx: ", context_left);
+    primary_spans.push(" ".into());
+    push_chat_header_item(&mut primary_spans, "tokens: ", token_usage);
     if let Some(pricing) = &context.pricing {
-        spans.push("  price ".dim());
-        spans.push(Span::from(pricing.clone()).green());
+        primary_spans.push(" ".into());
+        push_chat_header_item(&mut primary_spans, "price: ", pricing.clone());
     }
+    render_line(area, buf, area.y, Line::from(primary_spans));
 
-    render_line(area, buf, area.y, Line::from(spans));
+    if area.height > 1 {
+        let mut policy_spans = Vec::new();
+        push_chat_header_item(
+            &mut policy_spans,
+            "permissions: ",
+            context.permissions.clone(),
+        );
+        policy_spans.push(" ".into());
+        push_chat_header_item(&mut policy_spans, "approval: ", context.approval.clone());
+        render_line(
+            area,
+            buf,
+            area.y.saturating_add(1),
+            Line::from(policy_spans),
+        );
+    }
+}
+
+fn push_chat_header_item(
+    spans: &mut Vec<Span<'static>>,
+    label: &'static str,
+    value: impl Into<String>,
+) {
+    spans.push(label.dim());
+    spans.push(chat_info_span(value));
+}
+
+fn chat_info_span(text: impl Into<String>) -> Span<'static> {
+    Span::styled(text.into(), Style::new().fg(Color::Cyan))
 }
 
 fn compact_context_left_label(context_left: &str) -> String {
@@ -555,12 +546,42 @@ fn compact_context_left_label(context_left: &str) -> String {
         .to_string()
 }
 
-fn permission_header_width(area_width: u16) -> u16 {
-    if area_width >= 120 { 16 } else { 12 }
+fn chat_header_token_usage_label(width: u16, context: &RedesignChromeContext) -> String {
+    let detailed = detailed_token_usage_label(&context.token_usage);
+    if chat_header_primary_width(context, &detailed) <= width as usize {
+        detailed
+    } else {
+        compact_token_usage_label(&context.token_usage)
+    }
 }
 
-fn approval_header_width(area_width: u16) -> u16 {
-    if area_width >= 120 { 16 } else { 11 }
+fn detailed_token_usage_label(token_usage: &TokenUsage) -> String {
+    let detailed = token_usage.to_string();
+    detailed
+        .strip_prefix("Token usage: ")
+        .unwrap_or(detailed.as_str())
+        .to_string()
+}
+
+fn compact_token_usage_label(token_usage: &TokenUsage) -> String {
+    format_tokens_compact(token_usage.blended_total())
+}
+
+fn chat_header_primary_width(context: &RedesignChromeContext, token_usage: &str) -> usize {
+    let model = format!("{} {}", context.model, context.reasoning);
+    let context_left = compact_context_left_label(&context.context_left);
+    let mut width = UnicodeWidthStr::width("Model: ")
+        + UnicodeWidthStr::width(model.as_str())
+        + 1
+        + UnicodeWidthStr::width("ctx: ")
+        + UnicodeWidthStr::width(context_left.as_str())
+        + 1
+        + UnicodeWidthStr::width("tokens: ")
+        + UnicodeWidthStr::width(token_usage);
+    if let Some(pricing) = &context.pricing {
+        width += 1 + UnicodeWidthStr::width("price: ") + UnicodeWidthStr::width(pricing.as_str());
+    }
+    width
 }
 
 #[cfg(test)]
@@ -1432,48 +1453,39 @@ fn footer_info_line(width: u16, context: &RedesignChromeContext) -> Line<'static
 }
 
 fn footer_shortcuts_line(width: u16) -> Line<'static> {
-    if width >= 112 {
-        Line::from(vec![
-            "Alt-B".cyan(),
-            " side".dim(),
-            "  Alt-H".cyan(),
-            " help".dim(),
-            "  Alt-/".cyan(),
-            " cmds".dim(),
-            "  Alt-M".cyan(),
-            " model".dim(),
-            "  Alt-P".cyan(),
-            " plan".dim(),
-            "  Alt-T".cyan(),
-            " term".dim(),
-            "  Alt-W".cyan(),
-            " close".dim(),
-            "  C-T".cyan(),
-            " transcript".dim(),
-            "  C-C".cyan(),
-            " exit".dim(),
+    if width >= 100 {
+        shortcut_line(&[
+            ("Alt-H", "Help"),
+            ("Alt-/", "Commands"),
+            ("Alt-M", "Model"),
+            ("Alt-P", "Plan"),
+            ("Alt-T", "Terminal"),
+            ("C-T", "Transcript"),
+            ("C-C", "Exit"),
         ])
     } else if width >= 64 {
-        Line::from(vec![
-            "Alt-H".cyan(),
-            " help".dim(),
-            "  Alt-T".cyan(),
-            " term".dim(),
-            "  Alt-W".cyan(),
-            " close".dim(),
-            "  C-T".cyan(),
-            " transcript".dim(),
-            "  C-C".cyan(),
-            " exit".dim(),
+        shortcut_line(&[
+            ("Alt-H", "Help"),
+            ("Alt-/", "Cmds"),
+            ("Alt-T", "Term"),
+            ("C-C", "Exit"),
         ])
     } else {
-        Line::from(vec![
-            "C-T".cyan(),
-            " transcript".dim(),
-            "  C-C".cyan(),
-            " exit".dim(),
-        ])
+        shortcut_line(&[("Alt-H", "Help"), ("C-C", "Exit")])
     }
+}
+
+fn shortcut_line(items: &[(&'static str, &'static str)]) -> Line<'static> {
+    let mut spans = Vec::new();
+    for (idx, (key, label)) in items.iter().enumerate() {
+        if idx > 0 {
+            spans.push(" · ".dim());
+        }
+        spans.push((*key).cyan());
+        spans.push(" ".into());
+        spans.push((*label).dim());
+    }
+    Line::from(spans)
 }
 
 fn compact_workspace_label(context: &RedesignChromeContext, max_width: u16) -> String {
@@ -2501,7 +2513,7 @@ mod tests {
     #[test]
     fn chat_header_renders_detailed_token_usage() {
         let mut terminal =
-            Terminal::new(TestBackend::new(/*width*/ 180, /*height*/ 1)).expect("terminal");
+            Terminal::new(TestBackend::new(/*width*/ 180, /*height*/ 2)).expect("terminal");
         let mut context = RedesignChromeContext::fixture();
         context.token_usage = TokenUsage {
             input_tokens: 13_025_169,
@@ -2520,13 +2532,124 @@ mod tests {
         let rendered = terminal.backend().to_string();
         assert!(
             rendered.contains(
-                "Token usage: total=360,738 input=336,273 (+ 12,688,896 cached) output=24,465 (reasoning 8,790)"
+                "tokens: total=360,738 input=336,273 (+ 12,688,896 cached) output=24,465 (reasoning 8,790)"
             ),
             "expected detailed token usage in chat header, got: {rendered:?}"
         );
         assert!(
             !rendered.contains("tok 1.23M"),
             "compact token usage should not be rendered in chat header: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn chat_header_uses_clear_labels_full_approval_and_consistent_info_color() {
+        let mut terminal =
+            Terminal::new(TestBackend::new(/*width*/ 132, /*height*/ 2)).expect("terminal");
+        let mut context = RedesignChromeContext::fixture();
+        context.permissions = "workspace-write".to_string();
+        context.approval = "on-request/guardian_subagent".to_string();
+
+        terminal
+            .draw(|frame| {
+                render_chat_bar(frame.area(), frame.buffer_mut(), &context);
+            })
+            .expect("draw");
+
+        let rendered = terminal.backend().to_string();
+        let mut rows = rendered.lines();
+        let primary_row = rows.next().expect("primary chat header row");
+        let policy_row = rows.next().expect("policy chat header row");
+        assert!(
+            primary_row.contains("Model: gpt-5.4 xhigh"),
+            "model should use an explicit label, got: {rendered:?}"
+        );
+        assert!(
+            primary_row.contains("ctx: 72%"),
+            "context should use a colon-delimited label, got: {rendered:?}"
+        );
+        assert!(
+            primary_row.contains("tokens: total=2,100"),
+            "token usage should use a colon-delimited label, got: {rendered:?}"
+        );
+        assert!(
+            !primary_row.contains("permissions") && !primary_row.contains("approval"),
+            "policy fields should not render on the primary header row, got: {rendered:?}"
+        );
+        assert!(
+            policy_row.contains("permissions: workspace-write"),
+            "permissions should use a clear label, got: {rendered:?}"
+        );
+        assert!(
+            policy_row.contains("approval: on-request/guardian_subagent"),
+            "approval reviewer should not be pre-truncated, got: {rendered:?}"
+        );
+        assert!(
+            !policy_row.contains("perm ")
+                && !policy_row.contains("appv ")
+                && !policy_row.contains("..."),
+            "header should avoid unclear abbreviations and pre-truncation, got: {rendered:?}"
+        );
+
+        let buffer = terminal.backend().buffer();
+        let model_label_x = primary_row.find("Model:").expect("model label") as u16;
+        let model_x = primary_row.find("gpt-5.4").expect("model value") as u16;
+        let context_label_x = primary_row.find("ctx:").expect("context label") as u16;
+        let context_x = primary_row.find("72%").expect("context value") as u16;
+        let usage_label_x = primary_row.find("tokens:").expect("token usage label") as u16;
+        let usage_x = primary_row.find("total=2,100").expect("token usage value") as u16;
+        let permissions_label_x =
+            policy_row.find("permissions:").expect("permissions label") as u16;
+        let permissions_x = policy_row
+            .find("workspace-write")
+            .expect("permissions value") as u16;
+        let approval_label_x = policy_row.find("approval:").expect("approval label") as u16;
+        let approval_x = policy_row
+            .find("on-request/guardian_subagent")
+            .expect("approval value") as u16;
+
+        let label_fg = buffer[(model_label_x, 0)].fg;
+        let value_fg = buffer[(model_x, 0)].fg;
+        assert_ne!(
+            label_fg, value_fg,
+            "labels and values should use different colors"
+        );
+        assert_eq!(buffer[(context_label_x, 0)].fg, label_fg);
+        assert_eq!(buffer[(usage_label_x, 0)].fg, label_fg);
+        assert_eq!(buffer[(permissions_label_x, 1)].fg, label_fg);
+        assert_eq!(buffer[(approval_label_x, 1)].fg, label_fg);
+        assert_eq!(buffer[(context_x, 0)].fg, value_fg);
+        assert_eq!(buffer[(usage_x, 0)].fg, value_fg);
+        assert_eq!(buffer[(permissions_x, 1)].fg, value_fg);
+        assert_eq!(buffer[(approval_x, 1)].fg, value_fg);
+    }
+
+    #[test]
+    fn top_chrome_uses_sidebar_identity_and_chat_status_at_terminal_top() {
+        let rendered = render_fixture(100, 24);
+        let mut rows = rendered.lines();
+        let primary = rows.next().expect("primary top row").trim_matches('"');
+        let policy = rows.next().expect("policy top row").trim_matches('"');
+        let separator = rows.next().expect("chat separator row").trim_matches('"');
+
+        assert!(
+            primary
+                .starts_with("CODEX_CLI dev          |Model: gpt-5.4 xhigh ctx: 72% tokens: 2.1K"),
+            "top row should combine the product identity and chat status, got: {primary:?}"
+        );
+        assert!(
+            policy.starts_with(
+                "                       |permissions: workspace-write approval: auto-review"
+            ),
+            "second row should combine left chrome space and chat policy, got: {policy:?}"
+        );
+        assert!(
+            separator.starts_with("                       |---"),
+            "chat separator should start after the sidebar boundary, got: {separator:?}"
+        );
+        assert!(
+            !primary.contains("redesign-tui") && !policy.contains("redesign-tui"),
+            "top chat chrome should not contain branch/workspace metadata: {rendered:?}"
         );
     }
 
@@ -2617,6 +2740,25 @@ mod tests {
     }
 
     #[test]
+    fn layout_starts_sidebar_and_chat_header_at_terminal_top() {
+        let layout = layout_for_dimensions(Rect::new(0, 0, 100, 24), COMPOSER_ROWS);
+
+        assert_eq!(layout.side.y, 0, "sidebar should start at terminal top");
+        assert_eq!(
+            layout.main.y, 0,
+            "main chat column should start at terminal top"
+        );
+        assert_eq!(
+            layout.chat_header.y, 0,
+            "chat status header should occupy the first main rows"
+        );
+        assert_eq!(
+            layout.chat_separator.y, 2,
+            "separator should sit directly below the two-row chat header"
+        );
+    }
+
+    #[test]
     fn footer_splits_info_and_shortcuts_into_separate_rows() {
         let mut terminal =
             Terminal::new(TestBackend::new(/*width*/ 100, /*height*/ 2)).expect("terminal");
@@ -2637,8 +2779,18 @@ mod tests {
 
         assert!(info.contains("~/codes/codex"));
         assert!(info.contains("redesign-tui"));
+        assert!(!info.contains("workspace-write"));
+        assert!(!info.contains("auto-review"));
         assert!(!info.contains("Alt-H"));
         assert!(shortcuts.contains("Alt-H"));
+        assert!(shortcuts.contains("Alt-/"));
+        assert!(shortcuts.contains("Alt-M"));
+        assert!(shortcuts.contains("Alt-P"));
+        assert!(shortcuts.contains("Alt-T"));
+        assert!(shortcuts.contains("C-T"));
+        assert!(!shortcuts.contains("Alt-A"));
+        assert!(!shortcuts.contains("workspace-write"));
+        assert!(!shortcuts.contains("auto-review"));
         assert!(shortcuts.contains("C-C"));
         assert!(!shortcuts.contains("~/codes/codex"));
     }

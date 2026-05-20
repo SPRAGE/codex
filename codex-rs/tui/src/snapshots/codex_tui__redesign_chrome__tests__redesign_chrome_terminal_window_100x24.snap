@@ -2,10 +2,11 @@
 source: tui/src/redesign_chrome.rs
 expression: terminal.backend().to_string()
 ---
-"CODEX_CLI dev                                                                                       "
-"----------------------------------------------------------------------------------------------------"
-" CHATS                 |┌ Terminal Sessions  Enter view  Esc collapse/close ───────────────────────┐"
-" Alt-B focus           |│> [+] TERM 1 running  cargo test -p codex-tui                             │"
+"CODEX_CLI dev          |┌ Terminal Sessions  Enter view  Esc collapse/close ───────────────────────┐"
+"                       |│> [+] TERM 1 running  cargo test -p codex-tui                             │"
+"                       |│                                                                          │"
+" CHATS                 |│                                                                          │"
+" Alt-B focus           |│                                                                          │"
 "                       |│                                                                          │"
 " No chats yet          |│                                                                          │"
 "                       |│                                                                          │"
@@ -20,9 +21,8 @@ expression: terminal.backend().to_string()
 "  C-G    EDITOR        |│                                                                          │"
 "                       |│                                                                          │"
 "                       |│                                                                          │"
-"                       |│                                                                          │"
 "                       |└──────────────────────────────────────────────────────────────────────────┘"
 "                       |MSG> Describe the next change...                                            "
 "                       |----------------------------------------------------------------------------"
 "/tmp/project · unknown · -- · Plan chat                                                             "
-"Alt-H help  Alt-T term  Alt-W close  C-T transcript  C-C exit                                       "
+"Alt-H Help · Alt-/ Commands · Alt-M Model · Alt-P Plan · Alt-T Terminal · C-T Transcript · C-C Exit "

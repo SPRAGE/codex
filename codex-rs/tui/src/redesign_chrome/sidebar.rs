@@ -9,6 +9,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
 use super::RedesignChromeContext;
+use super::product_version_label;
 use super::truncate_text;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -199,7 +200,11 @@ pub(super) fn render_side_nav(
 
     let content_area = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
     let content_width = content_area.width;
+    let product = truncate_text(&product_version_label(&context.product), content_width);
     let mut lines = vec![
+        Line::from(Span::from(product).magenta().bold()),
+        Line::from(""),
+        Line::from(""),
         Line::from(vec![" ".into(), "CHATS".cyan().bold()]),
         Line::from(vec![
             " ".into(),
