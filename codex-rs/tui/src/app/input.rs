@@ -448,6 +448,12 @@ impl App {
             return RedesignShortcutAction::Redraw;
         }
 
+        if redesign_permissions_key_matches(key_event) {
+            self.redesign_sidebar_state.blur();
+            self.chat_widget.open_permissions_popup();
+            return RedesignShortcutAction::Redraw;
+        }
+
         if self.redesign_sidebar_state.focused() {
             return self.handle_redesign_sidebar_key(key_event, chat_count);
         }
@@ -983,6 +989,12 @@ fn redesign_model_key_matches(key_event: KeyEvent, composer_empty: bool) -> bool
             && matches!(key_event.code, KeyCode::Char('m' | 'M'))
             && key_event.modifiers.contains(KeyModifiers::ALT)
             && !key_event.modifiers.contains(KeyModifiers::CONTROL)
+}
+
+fn redesign_permissions_key_matches(key_event: KeyEvent) -> bool {
+    matches!(key_event.code, KeyCode::Char('a' | 'A'))
+        && key_event.modifiers.contains(KeyModifiers::ALT)
+        && !key_event.modifiers.contains(KeyModifiers::CONTROL)
 }
 
 fn redesign_new_chat_key_matches(key_event: KeyEvent) -> bool {
@@ -1605,6 +1617,21 @@ mod tests {
         let action = handle_redesign_key(
             &mut app,
             KeyEvent::new(KeyCode::Char('m'), KeyModifiers::ALT),
+        );
+
+        assert_eq!(action, RedesignShortcutAction::Redraw);
+        assert!(app.chat_widget.redesign_should_render_bottom_pane());
+    }
+
+    #[tokio::test]
+    async fn redesign_alt_a_opens_permissions_popup() {
+        let mut app = make_test_app().await;
+        app.redesign_chrome_enabled = true;
+        seed_model_session(&mut app);
+
+        let action = handle_redesign_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT),
         );
 
         assert_eq!(action, RedesignShortcutAction::Redraw);

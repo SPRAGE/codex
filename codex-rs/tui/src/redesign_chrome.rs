@@ -354,7 +354,13 @@ pub(crate) fn render_chrome(
     render_chat_bar_with_identity(layout.chat_header, buf, context, inline_identity.as_deref());
     draw_horizontal_rule(layout.chat_separator, buf, layout.chat_separator.y);
     render_side_nav(layout.side, buf, context, sidebar);
-    render_footer(layout.footer, buf, context);
+    render_footer_aligned(
+        layout.footer,
+        buf,
+        context,
+        layout.side.width,
+        layout.main.width,
+    );
 }
 
 fn layout_for(area: Rect, app: &App, legacy_bottom_pane: bool) -> RedesignLayout {
@@ -1427,22 +1433,34 @@ fn composer_prefix_width() -> usize {
     UnicodeWidthStr::width(COMPOSER_LABEL)
 }
 
+#[cfg(test)]
 fn render_footer(area: Rect, buf: &mut Buffer, context: &RedesignChromeContext) {
+    render_footer_aligned(area, buf, context, 0, area.width);
+}
+
+fn render_footer_aligned(
+    area: Rect,
+    buf: &mut Buffer,
+    context: &RedesignChromeContext,
+    side_width: u16,
+    main_width: u16,
+) {
     if area.is_empty() {
         return;
     }
 
     if area.height == 1 {
-        render_line(area, buf, area.y, footer_shortcuts_line(area.width));
+        render_footer_shortcuts(area, buf, area.y, side_width, main_width);
         return;
     }
 
-    render_line(area, buf, area.y, footer_info_line(area.width, context));
-    render_line(
+    render_footer_info(area, buf, area.y, context, side_width, main_width);
+    render_footer_shortcuts(
         area,
         buf,
         area.bottom().saturating_sub(1),
-        footer_shortcuts_line(area.width),
+        side_width,
+        main_width,
     );
 }
 
@@ -1450,6 +1468,46 @@ fn footer_info_line(width: u16, context: &RedesignChromeContext) -> Line<'static
     Span::from(compact_workspace_label(context, width))
         .dim()
         .into()
+}
+
+fn render_footer_info(
+    area: Rect,
+    buf: &mut Buffer,
+    y: u16,
+    context: &RedesignChromeContext,
+    side_width: u16,
+    main_width: u16,
+) {
+    if area.width == 0 || y >= area.bottom() {
+        return;
+    }
+
+    let side_width = side_width.min(area.width);
+    if side_width == 0 {
+        render_line(area, buf, y, footer_info_line(area.width, context));
+        return;
+    }
+
+    let divider_x = area.x.saturating_add(side_width.saturating_sub(1));
+    if divider_x < area.right() {
+        buf[(divider_x, y)]
+            .set_symbol("|")
+            .set_style(Style::new().dim());
+    }
+
+    let main_x = area.x.saturating_add(side_width);
+    let main_width = main_width.min(area.right().saturating_sub(main_x));
+    if main_width > 0 {
+        let main_area = Rect::new(main_x, y, main_width, 1);
+        render_line(main_area, buf, y, footer_info_line(main_width, context));
+    }
+
+    let right_divider_x = main_x.saturating_add(main_width);
+    if right_divider_x < area.right() {
+        buf[(right_divider_x, y)]
+            .set_symbol("|")
+            .set_style(Style::new().dim());
+    }
 }
 
 fn footer_shortcuts_line(width: u16) -> Line<'static> {
@@ -1463,6 +1521,15 @@ fn footer_shortcuts_line(width: u16) -> Line<'static> {
             ("C-T", "Transcript"),
             ("C-C", "Exit"),
         ])
+    } else if width >= 74 {
+        shortcut_line(&[
+            ("Alt-H", "Help"),
+            ("Alt-/", "Cmds"),
+            ("Alt-M", "Model"),
+            ("Alt-P", "Plan"),
+            ("Alt-T", "Term"),
+            ("C-C", "Exit"),
+        ])
     } else if width >= 64 {
         shortcut_line(&[
             ("Alt-H", "Help"),
@@ -1472,6 +1539,39 @@ fn footer_shortcuts_line(width: u16) -> Line<'static> {
         ])
     } else {
         shortcut_line(&[("Alt-H", "Help"), ("C-C", "Exit")])
+    }
+}
+
+fn render_footer_shortcuts(area: Rect, buf: &mut Buffer, y: u16, side_width: u16, main_width: u16) {
+    if area.width == 0 || y >= area.bottom() {
+        return;
+    }
+
+    let side_width = side_width.min(area.width);
+    if side_width == 0 {
+        render_line(area, buf, y, footer_shortcuts_line(area.width));
+        return;
+    }
+
+    let divider_x = area.x.saturating_add(side_width.saturating_sub(1));
+    if divider_x < area.right() {
+        buf[(divider_x, y)]
+            .set_symbol("|")
+            .set_style(Style::new().dim());
+    }
+
+    let main_x = area.x.saturating_add(side_width);
+    let main_width = main_width.min(area.right().saturating_sub(main_x));
+    if main_width > 0 {
+        let main_area = Rect::new(main_x, y, main_width, 1);
+        render_line(main_area, buf, y, footer_shortcuts_line(main_width));
+    }
+
+    let right_divider_x = main_x.saturating_add(main_width);
+    if right_divider_x < area.right() {
+        buf[(right_divider_x, y)]
+            .set_symbol("|")
+            .set_style(Style::new().dim());
     }
 }
 
@@ -2793,6 +2893,102 @@ mod tests {
         assert!(!shortcuts.contains("auto-review"));
         assert!(shortcuts.contains("C-C"));
         assert!(!shortcuts.contains("~/codes/codex"));
+    }
+
+    #[test]
+    fn footer_shortcuts_align_to_chat_column_when_sidebar_is_visible() {
+        let rendered = render_fixture(100, 24);
+        let shortcuts = rendered
+            .lines()
+            .last()
+            .expect("shortcut footer row")
+            .trim_matches('"');
+
+        assert!(
+            shortcuts.starts_with("                       |Alt-H Help · Alt-/ Cmds"),
+            "shortcut row should start at the chat column after the sidebar boundary, got: {shortcuts:?}"
+        );
+        assert!(
+            shortcuts.contains("Alt-M Model")
+                && shortcuts.contains("Alt-P Plan")
+                && shortcuts.contains("Alt-T Term")
+                && shortcuts.contains("C-C Exit"),
+            "aligned shortcut row should keep core shortcuts visible, got: {shortcuts:?}"
+        );
+        assert!(
+            !shortcuts.contains("C-T Transcript"),
+            "aligned shortcut row should use the compact set when the chat column is too narrow, got: {shortcuts:?}"
+        );
+    }
+
+    #[test]
+    fn footer_info_aligns_to_chat_column_when_sidebar_is_visible() {
+        let rendered = render_fixture(100, 24);
+        let info = rendered
+            .lines()
+            .rev()
+            .nth(1)
+            .expect("footer info row")
+            .trim_matches('"');
+
+        assert!(
+            info.starts_with("                       |~/codes/codex · redesign-tui"),
+            "footer info row should start at the chat column after the sidebar boundary, got: {info:?}"
+        );
+        assert!(
+            info.contains("3 files") && info.contains("Improve terminal UI"),
+            "aligned footer info should keep workspace details visible, got: {info:?}"
+        );
+    }
+
+    #[test]
+    fn footer_shortcuts_align_between_sidebar_and_right_rail() {
+        let rendered = render_fixture(132, 24);
+        let shortcuts = rendered
+            .lines()
+            .last()
+            .expect("shortcut footer row")
+            .trim_matches('"');
+        let divider_positions: Vec<usize> = shortcuts
+            .chars()
+            .enumerate()
+            .filter_map(|(idx, ch)| (ch == '|').then_some(idx))
+            .collect();
+
+        assert_eq!(
+            divider_positions,
+            vec![23, 102],
+            "footer shortcut row should share sidebar/main/right-rail dividers, got: {shortcuts:?}"
+        );
+        assert!(
+            shortcuts[24..102].contains("Alt-H Help · Alt-/ Cmds"),
+            "shortcut text should live inside the main chat column, got: {shortcuts:?}"
+        );
+    }
+
+    #[test]
+    fn sidebar_actions_pin_to_bottom_of_sidebar() {
+        let rendered = render_fixture(100, 24);
+        let rows: Vec<&str> = rendered
+            .lines()
+            .map(|line| line.trim_matches('"'))
+            .collect();
+
+        assert!(
+            rows[12].starts_with("                       |"),
+            "chat list should leave vertical breathing room above pinned actions, got: {:?}",
+            rows[12]
+        );
+        assert!(
+            rows[13].starts_with(" ACTIONS               |"),
+            "actions heading should pin near the sidebar bottom, got: {:?}",
+            rows[13]
+        );
+        assert!(
+            rows[21].starts_with("  C-G    EDITOR        |"),
+            "last action should sit on the final sidebar row above the footer, got: {:?}",
+            rows[21]
+        );
     }
 
     #[test]

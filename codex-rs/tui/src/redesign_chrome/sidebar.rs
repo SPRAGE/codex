@@ -201,7 +201,7 @@ pub(super) fn render_side_nav(
     let content_area = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
     let content_width = content_area.width;
     let product = truncate_text(&product_version_label(&context.product), content_width);
-    let mut lines = vec![
+    let mut top_lines = vec![
         Line::from(Span::from(product).magenta().bold()),
         Line::from(""),
         Line::from(""),
@@ -216,11 +216,12 @@ pub(super) fn render_side_nav(
         ]),
         Line::from(""),
     ];
-    let action_row_count = 2 + RedesignSidebarItem::ALL.len() as u16;
-    let fixed_sidebar_rows = lines.len() as u16 + action_row_count;
-    let chat_row_capacity = area.height.saturating_sub(fixed_sidebar_rows) as usize;
+    let action_lines = sidebar_action_lines(sidebar, context.final_only);
+    let action_height = (action_lines.len() as u16).min(content_area.height);
+    let top_height = content_area.height.saturating_sub(action_height);
+    let chat_row_capacity = top_height.saturating_sub(top_lines.len() as u16) as usize;
     if context.chats.is_empty() {
-        lines.push(Line::from(vec![" ".into(), "No chats yet".dim()]));
+        top_lines.push(Line::from(vec![" ".into(), "No chats yet".dim()]));
     } else if chat_row_capacity > 0 {
         let selected_chat_idx = match sidebar.selected() {
             RedesignSidebarSelection::Chat(idx) => idx.min(context.chats.len() - 1),
@@ -228,18 +229,37 @@ pub(super) fn render_side_nav(
         };
         let chat_start = selected_chat_idx.saturating_sub(chat_row_capacity.saturating_sub(1));
         let chat_end = (chat_start + chat_row_capacity).min(context.chats.len());
-        lines.extend(context.chats[chat_start..chat_end].iter().enumerate().map(
+        top_lines.extend(context.chats[chat_start..chat_end].iter().enumerate().map(
             |(offset, chat)| chat_item_line(chat_start + offset, chat, sidebar, content_width),
         ));
     }
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![" ".into(), "ACTIONS".cyan().bold()]));
-    lines.extend(
-        RedesignSidebarItem::ALL
-            .into_iter()
-            .map(|item| sidebar_item_line(item, sidebar, context.final_only)),
-    );
-    Paragraph::new(lines).render(content_area, buf);
+    if top_height > 0 {
+        let top_area = Rect::new(
+            content_area.x,
+            content_area.y,
+            content_area.width,
+            top_height,
+        );
+        Paragraph::new(top_lines).render(top_area, buf);
+    }
+
+    if action_height > 0 {
+        let action_start = content_area.bottom().saturating_sub(action_height);
+        let action_area = Rect::new(
+            content_area.x,
+            action_start,
+            content_area.width,
+            action_height,
+        );
+        let visible_start = action_lines.len().saturating_sub(action_height as usize);
+        Paragraph::new(
+            action_lines
+                .into_iter()
+                .skip(visible_start)
+                .collect::<Vec<_>>(),
+        )
+        .render(action_area, buf);
+    }
 
     let border_x = area.right().saturating_sub(1);
     for y in area.y..area.bottom() {
@@ -247,6 +267,16 @@ pub(super) fn render_side_nav(
             .set_symbol("|")
             .set_style(Style::new().dim());
     }
+}
+
+fn sidebar_action_lines(sidebar: RedesignSidebarState, final_only: bool) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(vec![" ".into(), "ACTIONS".cyan().bold()])];
+    lines.extend(
+        RedesignSidebarItem::ALL
+            .into_iter()
+            .map(|item| sidebar_item_line(item, sidebar, final_only)),
+    );
+    lines
 }
 
 fn chat_item_line(
