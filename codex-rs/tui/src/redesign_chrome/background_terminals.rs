@@ -10,14 +10,13 @@ use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use ratatui::widgets::Block;
-use ratatui::widgets::Borders;
 use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthStr;
 
 use super::truncate_text;
+use super::window;
 
 pub(super) fn render_window(
     area: Rect,
@@ -30,10 +29,7 @@ pub(super) fn render_window(
     let Some(panel) = terminal_window_rect(area) else {
         return;
     };
-    let block = Block::default()
-        .title(" Terminal Sessions  Enter view  Esc collapse/close ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().cyan());
+    let block = window::overlay_block(" Terminal Sessions  Enter view  Esc collapse/close ");
     let inner = block.inner(panel);
     let selected_idx = clamp_terminal_index(selected_idx, terminals.len());
     let expanded_idx = expanded_idx.filter(|idx| *idx < terminals.len());

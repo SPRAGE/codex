@@ -465,6 +465,7 @@ impl ChatWidget {
             })
             .count();
         self.transcript.last_plan_progress = (total > 0).then_some((completed, total));
+        self.transcript.latest_plan_update = Some(update.clone());
         self.refresh_status_surfaces();
         self.add_to_history(history_cell::new_plan_update(update));
     }

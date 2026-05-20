@@ -1696,3 +1696,29 @@ async fn plan_update_renders_history_cell() {
     assert!(blob.contains("Implement feature"));
     assert!(blob.contains("Write tests"));
 }
+
+#[tokio::test]
+async fn plan_update_is_available_to_redesign_plan_window() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.on_plan_update(UpdatePlanArgs {
+        explanation: Some("Adapting plan".to_string()),
+        plan: vec![
+            PlanItemArg {
+                step: "Explore codebase".into(),
+                status: StepStatus::Completed,
+            },
+            PlanItemArg {
+                step: "Implement feature".into(),
+                status: StepStatus::InProgress,
+            },
+        ],
+    });
+
+    let lines = chat
+        .redesign_latest_plan_display_lines(/*width*/ 80)
+        .expect("plan update should be available to the redesign plan window");
+    let blob = lines_to_single_string(&lines);
+    assert!(blob.contains("Updated Plan"));
+    assert!(blob.contains("Explore codebase"));
+    assert!(blob.contains("Implement feature"));
+}

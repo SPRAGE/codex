@@ -13,7 +13,6 @@ use crate::motion::MotionMode;
 use crate::motion::ReducedMotionIndicator;
 use crate::motion::rotating_activity_indicator;
 use crate::status::format_directory_display;
-use crate::status::format_tokens_compact;
 use crate::token_usage::TokenUsage;
 use crate::version::CODEX_CLI_VERSION;
 use crate::wrapping::RtOptions;
@@ -27,8 +26,6 @@ use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use ratatui::widgets::Block;
-use ratatui::widgets::Borders;
 use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
@@ -39,6 +36,7 @@ use unicode_width::UnicodeWidthStr;
 mod background_terminals;
 mod layout;
 mod sidebar;
+mod window;
 
 use layout::RedesignLayout;
 use layout::available_chat_body_height;
@@ -422,10 +420,7 @@ fn render_plan_window_from_app(area: Rect, buf: &mut Buffer, app: &App) {
         lines.push("...".dim().into());
     }
 
-    let block = Block::default()
-        .title(" Plan  Alt-P close ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().magenta());
+    let block = window::overlay_block(" Plan  Alt-P close ");
     let inner = block.inner(panel);
     Clear.render(panel, buf);
     block.render(panel, buf);
@@ -502,8 +497,7 @@ fn render_chat_bar(area: Rect, buf: &mut Buffer, context: &RedesignChromeContext
             "ctx ".dim(),
             Span::from(compact_context_left_label(&context.context_left)),
             " ".into(),
-            "tok ".dim(),
-            Span::from(format_tokens_compact(context.token_usage.total_tokens)).cyan(),
+            Span::from(context.token_usage.to_string()).cyan(),
             " ".into(),
             "perm ".dim(),
             Span::from(truncate_text(
@@ -526,8 +520,7 @@ fn render_chat_bar(area: Rect, buf: &mut Buffer, context: &RedesignChromeContext
             "ctx ".dim(),
             Span::from(compact_context_left_label(&context.context_left)),
             " ".into(),
-            "tok ".dim(),
-            Span::from(format_tokens_compact(context.token_usage.total_tokens)).cyan(),
+            Span::from(context.token_usage.to_string()).cyan(),
             " ".into(),
             "perm ".dim(),
             Span::from(truncate_text(&context.permissions, 8)).cyan(),
@@ -540,8 +533,8 @@ fn render_chat_bar(area: Rect, buf: &mut Buffer, context: &RedesignChromeContext
             Span::from(format!("{} {}", context.model, context.reasoning)).magenta(),
             " | ctx ".dim(),
             Span::from(compact_context_left_label(&context.context_left)),
-            " | tok ".dim(),
-            Span::from(format_tokens_compact(context.token_usage.total_tokens)).cyan(),
+            " | ".dim(),
+            Span::from(context.token_usage.to_string()).cyan(),
         ]);
     }
     if let Some(pricing) = &context.pricing {
@@ -1418,15 +1411,30 @@ fn render_footer(area: Rect, buf: &mut Buffer, context: &RedesignChromeContext) 
         return;
     }
 
-    let line = if area.width >= 112 {
-        let hints = "  Alt-B side  Alt-H help  Alt-/ cmds  Alt-M model  Alt-P plan  Alt-T term  Alt-W close  C-T transcript  C-C exit";
-        let workspace_width = area
-            .width
-            .saturating_sub(UnicodeWidthStr::width(hints) as u16);
-        let workspace = compact_workspace_label(context, workspace_width);
+    if area.height == 1 {
+        render_line(area, buf, area.y, footer_shortcuts_line(area.width));
+        return;
+    }
+
+    render_line(area, buf, area.y, footer_info_line(area.width, context));
+    render_line(
+        area,
+        buf,
+        area.bottom().saturating_sub(1),
+        footer_shortcuts_line(area.width),
+    );
+}
+
+fn footer_info_line(width: u16, context: &RedesignChromeContext) -> Line<'static> {
+    Span::from(compact_workspace_label(context, width))
+        .dim()
+        .into()
+}
+
+fn footer_shortcuts_line(width: u16) -> Line<'static> {
+    if width >= 112 {
         Line::from(vec![
-            Span::from(workspace).dim(),
-            "  Alt-B".cyan(),
+            "Alt-B".cyan(),
             " side".dim(),
             "  Alt-H".cyan(),
             " help".dim(),
@@ -1445,15 +1453,9 @@ fn render_footer(area: Rect, buf: &mut Buffer, context: &RedesignChromeContext) 
             "  C-C".cyan(),
             " exit".dim(),
         ])
-    } else if area.width >= 64 {
-        let hints = "  Alt-H help  Alt-T term  Alt-W close  C-T transcript  C-C exit";
-        let workspace_width = area
-            .width
-            .saturating_sub(UnicodeWidthStr::width(hints) as u16);
-        let workspace = compact_workspace_label(context, workspace_width);
+    } else if width >= 64 {
         Line::from(vec![
-            Span::from(workspace).dim(),
-            "  Alt-H".cyan(),
+            "Alt-H".cyan(),
             " help".dim(),
             "  Alt-T".cyan(),
             " term".dim(),
@@ -1465,20 +1467,13 @@ fn render_footer(area: Rect, buf: &mut Buffer, context: &RedesignChromeContext) 
             " exit".dim(),
         ])
     } else {
-        let hints = "  C-T transcript  C-C exit";
-        let workspace_width = area
-            .width
-            .saturating_sub(UnicodeWidthStr::width(hints) as u16);
-        let workspace = compact_workspace_label(context, workspace_width);
         Line::from(vec![
-            Span::from(workspace).dim(),
-            "  C-T".cyan(),
+            "C-T".cyan(),
             " transcript".dim(),
             "  C-C".cyan(),
             " exit".dim(),
         ])
-    };
-    render_line(area, buf, area.y, line);
+    }
 }
 
 fn compact_workspace_label(context: &RedesignChromeContext, max_width: u16) -> String {
@@ -2504,6 +2499,38 @@ mod tests {
     }
 
     #[test]
+    fn chat_header_renders_detailed_token_usage() {
+        let mut terminal =
+            Terminal::new(TestBackend::new(/*width*/ 180, /*height*/ 1)).expect("terminal");
+        let mut context = RedesignChromeContext::fixture();
+        context.token_usage = TokenUsage {
+            input_tokens: 13_025_169,
+            cached_input_tokens: 12_688_896,
+            output_tokens: 24_465,
+            reasoning_output_tokens: 8_790,
+            total_tokens: 1_234_567,
+        };
+
+        terminal
+            .draw(|frame| {
+                render_chat_bar(frame.area(), frame.buffer_mut(), &context);
+            })
+            .expect("draw");
+
+        let rendered = terminal.backend().to_string();
+        assert!(
+            rendered.contains(
+                "Token usage: total=360,738 input=336,273 (+ 12,688,896 cached) output=24,465 (reasoning 8,790)"
+            ),
+            "expected detailed token usage in chat header, got: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("tok 1.23M"),
+            "compact token usage should not be rendered in chat header: {rendered:?}"
+        );
+    }
+
+    #[test]
     fn narrow_chrome_omits_side_nav_snapshot() {
         assert_snapshot!("redesign_chrome_narrow_72x18", render_fixture(72, 18));
     }
@@ -2566,6 +2593,11 @@ mod tests {
             let layout = layout_for_dimensions(Rect::new(0, 0, width, height), COMPOSER_ROWS);
 
             assert_eq!(
+                layout.footer.height,
+                2.min(height),
+                "footer should reserve separate info and shortcut rows for {width}x{height}"
+            );
+            assert_eq!(
                 layout.footer.bottom(),
                 height,
                 "footer should stay anchored at terminal bottom for {width}x{height}"
@@ -2582,6 +2614,33 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn footer_splits_info_and_shortcuts_into_separate_rows() {
+        let mut terminal =
+            Terminal::new(TestBackend::new(/*width*/ 100, /*height*/ 2)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                render_background(frame.area(), frame.buffer_mut());
+                render_footer(
+                    frame.area(),
+                    frame.buffer_mut(),
+                    &RedesignChromeContext::fixture(),
+                );
+            })
+            .expect("draw");
+        let rendered = terminal.backend().to_string();
+        let mut rows = rendered.lines();
+        let info = rows.next().expect("info row");
+        let shortcuts = rows.next().expect("shortcut row");
+
+        assert!(info.contains("~/codes/codex"));
+        assert!(info.contains("redesign-tui"));
+        assert!(!info.contains("Alt-H"));
+        assert!(shortcuts.contains("Alt-H"));
+        assert!(shortcuts.contains("C-C"));
+        assert!(!shortcuts.contains("~/codes/codex"));
     }
 
     #[test]
@@ -2670,6 +2729,17 @@ mod tests {
                 render_app(frame.area(), frame.buffer_mut(), &app);
             })
             .expect("draw");
+
+        let layout = layout_for(
+            Rect::new(0, 0, 100, 24),
+            &app,
+            app.chat_widget.redesign_should_render_bottom_pane(),
+        );
+        let panel = plan_window_rect(layout.main).expect("plan window rect");
+        assert_eq!(
+            terminal.backend().buffer()[(panel.x, panel.y)].fg,
+            Color::Cyan
+        );
 
         assert_snapshot!(
             "redesign_chrome_plan_window_100x24",

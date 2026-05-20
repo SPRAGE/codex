@@ -5,7 +5,7 @@ use super::RedesignSidebarState;
 const TOP_ROWS: u16 = 2;
 const CHAT_SEPARATOR_ROWS: u16 = 1;
 const CHAT_HEADER_ROWS: u16 = 1;
-const FOOTER_ROWS: u16 = 1;
+const FOOTER_ROWS: u16 = 2;
 const WIDE_SIDE_WIDTH: u16 = 24;
 const RIGHT_RAIL_WIDTH: u16 = 30;
 const MIN_WIDE_WIDTH: u16 = 88;
