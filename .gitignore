@@ -42,6 +42,7 @@ AGENTS.override.md
 .codex/tmp/
 .codex/sessions/
 .codex/logs/
+.superpowers/
 .claude/settings.local.json
 .claude/local/
 .claude/tmp/

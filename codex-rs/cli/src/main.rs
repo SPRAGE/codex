@@ -174,6 +174,9 @@ enum Subcommand {
     /// Resume a previous interactive session (picker by default; use --last to continue the most recent).
     Resume(ResumeCommand),
 
+    /// Attach to the most recently updated live interactive session from the local app-server daemon.
+    Attach(AttachCommand),
+
     /// Fork a previous interactive session (picker by default; use --last to fork the most recent).
     Fork(ForkCommand),
 
@@ -314,6 +317,18 @@ struct ResumeCommand {
 
     #[clap(flatten)]
     remote: InteractiveRemoteOptions,
+
+    #[clap(flatten)]
+    config_overrides: TuiCli,
+}
+
+#[derive(Debug, Parser)]
+struct AttachCommand {
+    /// Attach to the most recently updated loaded interactive session.
+    ///
+    /// This flag is accepted for readability; v0 attach always selects the latest loaded session.
+    #[arg(long = "last", default_value_t = false)]
+    last: bool,
 
     #[clap(flatten)]
     config_overrides: TuiCli,
@@ -1125,6 +1140,29 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             .await?;
             handle_app_exit(exit_info)?;
         }
+        Some(Subcommand::Attach(AttachCommand {
+            last: _,
+            config_overrides,
+        })) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "attach",
+            )?;
+            interactive = finalize_attach_interactive(
+                interactive,
+                root_config_overrides.clone(),
+                config_overrides,
+            );
+            let exit_info = run_interactive_tui(
+                interactive,
+                Some("unix://".to_string()),
+                None,
+                arg0_paths.clone(),
+            )
+            .await?;
+            handle_app_exit(exit_info)?;
+        }
         Some(Subcommand::Fork(ForkCommand {
             session_id,
             last,
@@ -1484,12 +1522,13 @@ fn profile_v2_for_subcommand<'a>(
         Subcommand::Exec(_)
         | Subcommand::Review(_)
         | Subcommand::Resume(_)
+        | Subcommand::Attach(_)
         | Subcommand::Fork(_)
         | Subcommand::Debug(DebugCommand {
             subcommand: DebugSubcommand::PromptInput(_),
         }) => Ok(Some(profile_v2)),
         _ => anyhow::bail!(
-            "--profile-v2 only applies to runtime commands: `codex`, `codex exec`, `codex review`, `codex resume`, `codex fork`, and `codex debug prompt-input`."
+            "--profile-v2 only applies to runtime commands: `codex`, `codex exec`, `codex review`, `codex resume`, `codex attach`, `codex fork`, and `codex debug prompt-input`."
         ),
     }
 }
@@ -1885,6 +1924,7 @@ fn unsupported_subcommand_name_for_strict_config(
         | Some(Subcommand::Review(_))
         | Some(Subcommand::McpServer(_))
         | Some(Subcommand::Resume(_))
+        | Some(Subcommand::Attach(_))
         | Some(Subcommand::Fork(_))
         | Some(Subcommand::Doctor(_)) => None,
         Some(Subcommand::AppServer(app_server)) if app_server.subcommand.is_none() => None,
@@ -2014,6 +2054,23 @@ fn read_remote_auth_token_from_env_var(env_var_name: &str) -> anyhow::Result<Str
     read_remote_auth_token_from_env_var_with(env_var_name, |name| std::env::var(name))
 }
 
+fn resolve_attachable_remote_arg(
+    attachable: bool,
+    remote: Option<String>,
+    remote_auth_token_env: Option<&str>,
+) -> Result<Option<String>, String> {
+    if !attachable {
+        return Ok(remote);
+    }
+    if remote.is_some() {
+        return Err("`--attachable` cannot be combined with `--remote`; it starts and connects to the local app-server daemon via `unix://`.".to_string());
+    }
+    if remote_auth_token_env.is_some() {
+        return Err("`--attachable` cannot be combined with `--remote-auth-token-env`; local Unix sockets do not use bearer-token auth.".to_string());
+    }
+    Ok(Some("unix://".to_string()))
+}
+
 async fn run_interactive_tui(
     mut interactive: TuiCli,
     remote: Option<String>,
@@ -2041,6 +2098,19 @@ async fn run_interactive_tui(
                 "Refusing to start the interactive TUI because TERM is set to \"dumb\". Run in a supported terminal or unset TERM.",
             ));
         }
+    }
+
+    let remote = resolve_attachable_remote_arg(
+        interactive.attachable,
+        remote,
+        remote_auth_token_env.as_deref(),
+    )
+    .map_err(std::io::Error::other)?;
+
+    if interactive.attachable {
+        codex_app_server_daemon::ensure_remote_control_started()
+            .await
+            .map_err(std::io::Error::other)?;
     }
 
     let mut remote_endpoint = remote
@@ -2146,6 +2216,25 @@ fn finalize_resume_interactive(
     merge_interactive_cli_flags(&mut interactive, resume_cli);
 
     // Propagate any root-level config overrides (e.g. `-c key=value`).
+    prepend_config_flags(&mut interactive.config_overrides, root_config_overrides);
+
+    interactive
+}
+
+/// Build the final `TuiCli` for a `codex attach` invocation.
+fn finalize_attach_interactive(
+    mut interactive: TuiCli,
+    root_config_overrides: CliConfigOverrides,
+    attach_cli: TuiCli,
+) -> TuiCli {
+    interactive.attach_latest_loaded = true;
+    interactive.resume_picker = false;
+    interactive.resume_last = false;
+    interactive.resume_session_id = None;
+    interactive.resume_show_all = true;
+    interactive.resume_include_non_interactive = false;
+
+    merge_interactive_cli_flags(&mut interactive, attach_cli);
     prepend_config_flags(&mut interactive.config_overrides, root_config_overrides);
 
     interactive
@@ -2282,6 +2371,27 @@ mod tests {
         };
 
         finalize_fork_interactive(interactive, root_overrides, session_id, last, all, fork_cli)
+    }
+
+    fn finalize_attach_from_args(args: &[&str]) -> TuiCli {
+        let cli = MultitoolCli::try_parse_from(args).expect("parse");
+        let MultitoolCli {
+            interactive,
+            config_overrides: root_overrides,
+            subcommand,
+            feature_toggles: _,
+            remote: _,
+        } = cli;
+
+        let Subcommand::Attach(AttachCommand {
+            last: _,
+            config_overrides: attach_cli,
+        }) = subcommand.expect("attach present")
+        else {
+            unreachable!()
+        };
+
+        finalize_attach_interactive(interactive, root_overrides, attach_cli)
     }
 
     fn profile_v2_for_args(args: &[&str]) -> anyhow::Result<Option<String>> {
@@ -3019,6 +3129,79 @@ mod tests {
             panic!("expected resume subcommand");
         };
         assert_eq!(remote.remote.as_deref(), Some("unix://codex.sock"));
+    }
+
+    #[test]
+    fn attach_subcommand_parses_last() {
+        let cli = MultitoolCli::try_parse_from(["codex", "attach", "--last"]).expect("parse");
+        let Some(Subcommand::Attach(AttachCommand { last, .. })) = cli.subcommand else {
+            panic!("expected attach subcommand");
+        };
+
+        assert!(last);
+    }
+
+    #[test]
+    fn attach_finalizer_sets_latest_loaded_attach_mode() {
+        let interactive = finalize_attach_interactive(
+            TuiCli::try_parse_from(["codex"]).expect("base interactive"),
+            CliConfigOverrides::default(),
+            TuiCli::try_parse_from(["codex"]).expect("attach overrides"),
+        );
+
+        assert!(interactive.attach_latest_loaded);
+        assert!(!interactive.resume_picker);
+        assert!(!interactive.resume_last);
+        assert_eq!(interactive.resume_session_id, None);
+    }
+
+    #[test]
+    fn attach_merges_option_flags() {
+        let interactive =
+            finalize_attach_from_args(["codex", "attach", "-m", "gpt-5.1-test"].as_ref());
+
+        assert_eq!(interactive.model.as_deref(), Some("gpt-5.1-test"));
+        assert!(interactive.attach_latest_loaded);
+    }
+
+    #[test]
+    fn attachable_local_remote_arg_uses_default_unix_socket() {
+        let resolved = resolve_attachable_remote_arg(
+            /*attachable*/ true, /*remote*/ None, /*remote_auth_token_env*/ None,
+        )
+        .expect("attachable remote should resolve");
+
+        assert_eq!(resolved.as_deref(), Some("unix://"));
+    }
+
+    #[test]
+    fn attachable_rejects_explicit_remote() {
+        let err = resolve_attachable_remote_arg(
+            /*attachable*/ true,
+            Some("unix:///tmp/codex.sock".to_string()),
+            /*remote_auth_token_env*/ None,
+        )
+        .expect_err("attachable should reject explicit remote");
+
+        assert!(
+            err.contains("`--attachable` cannot be combined with `--remote`"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn attachable_rejects_remote_auth_token_env() {
+        let err = resolve_attachable_remote_arg(
+            /*attachable*/ true,
+            /*remote*/ None,
+            Some("CODEX_REMOTE_AUTH_TOKEN"),
+        )
+        .expect_err("attachable should reject remote auth token env");
+
+        assert!(
+            err.contains("`--attachable` cannot be combined with `--remote-auth-token-env`"),
+            "{err}"
+        );
     }
 
     #[test]

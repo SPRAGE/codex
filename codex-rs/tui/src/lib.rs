@@ -31,9 +31,11 @@ use codex_app_server_protocol::Account as AppServerAccount;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::AuthMode as AppServerAuthMode;
 use codex_app_server_protocol::ConfigWarningNotification;
+use codex_app_server_protocol::SessionSource as AppServerSessionSource;
 use codex_app_server_protocol::Thread as AppServerThread;
 use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
+use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
 use codex_cloud_requirements::cloud_requirements_loader_for_storage;
@@ -714,6 +716,65 @@ async fn lookup_latest_session_target_with_app_server(
         .find_map(session_target_from_app_server_thread))
 }
 
+fn is_attachable_interactive_source(source: &AppServerSessionSource) -> bool {
+    matches!(
+        source,
+        AppServerSessionSource::Cli | AppServerSessionSource::VsCode
+    )
+}
+
+async fn lookup_latest_loaded_session_target_with_app_server(
+    app_server: &mut AppServerSession,
+) -> color_eyre::Result<Option<resume_picker::SessionTarget>> {
+    let mut cursor = None;
+    let mut best: Option<AppServerThread> = None;
+
+    loop {
+        let response = app_server
+            .thread_loaded_list(ThreadLoadedListParams {
+                cursor: cursor.clone(),
+                limit: Some(100),
+            })
+            .await?;
+
+        for id in response.data {
+            let Ok(thread_id) = ThreadId::from_string(&id) else {
+                warn!(
+                    thread_id = id,
+                    "Ignoring loaded thread with invalid thread id"
+                );
+                continue;
+            };
+            let thread = match app_server
+                .thread_read(thread_id, /*include_turns*/ false)
+                .await
+            {
+                Ok(thread) => thread,
+                Err(err) => {
+                    warn!(%err, %thread_id, "Failed to read loaded thread during attach lookup");
+                    continue;
+                }
+            };
+            if thread.ephemeral || !is_attachable_interactive_source(&thread.source) {
+                continue;
+            }
+            let replace_best = best
+                .as_ref()
+                .is_none_or(|current| thread.updated_at > current.updated_at);
+            if replace_best {
+                best = Some(thread);
+            }
+        }
+
+        let Some(next_cursor) = response.next_cursor else {
+            break;
+        };
+        cursor = Some(next_cursor);
+    }
+
+    Ok(best.and_then(session_target_from_app_server_thread))
+}
+
 fn latest_session_lookup_params(
     is_remote: bool,
     config: &Config,
@@ -1378,8 +1439,30 @@ async fn run_ratatui_app(
         })
     };
 
+    let use_attach = cli.attach_latest_loaded;
     let use_fork = cli.fork_picker || cli.fork_last || cli.fork_session_id.is_some();
-    let session_selection = if use_fork {
+    let session_selection = if use_attach {
+        let Some(startup_app_server) = app_server.as_mut() else {
+            unreachable!("app server should be initialized for attach");
+        };
+        match lookup_latest_loaded_session_target_with_app_server(startup_app_server).await? {
+            Some(target_session) => resume_picker::SessionSelection::Resume(target_session),
+            None => {
+                terminal_restore_guard.restore_silently();
+                session_log::log_session_end();
+                let _ = tui.terminal.clear();
+                return Ok(AppExitInfo {
+                    token_usage: crate::token_usage::TokenUsage::default(),
+                    thread_id: None,
+                    thread_name: None,
+                    update_action: None,
+                    exit_reason: ExitReason::Fatal(
+                        "No attachable Codex session is currently loaded. Start the desktop session with `codex --attachable`, then run `codex attach` from the SSH terminal.".to_string(),
+                    ),
+                });
+            }
+        }
+    } else if use_fork {
         if let Some(id_str) = cli.fork_session_id.as_deref() {
             let Some(startup_app_server) = app_server.as_mut() else {
                 unreachable!("app server should be initialized for --fork <id>");
@@ -1906,6 +1989,26 @@ mod tests {
         };
 
         assert_eq!(target.display_label(), format!("thread {thread_id}"));
+    }
+
+    #[test]
+    fn attachable_thread_filter_accepts_cli_and_vscode_sources() {
+        assert!(is_attachable_interactive_source(
+            &AppServerSessionSource::Cli
+        ));
+        assert!(is_attachable_interactive_source(
+            &AppServerSessionSource::VsCode
+        ));
+    }
+
+    #[test]
+    fn attachable_thread_filter_rejects_non_interactive_sources() {
+        assert!(!is_attachable_interactive_source(
+            &AppServerSessionSource::Exec
+        ));
+        assert!(!is_attachable_interactive_source(
+            &AppServerSessionSource::AppServer
+        ));
     }
 
     #[test]

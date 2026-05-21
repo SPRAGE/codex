@@ -37,6 +37,10 @@ pub struct Cli {
     #[clap(skip)]
     pub resume_include_non_interactive: bool,
 
+    /// Internal: attach to the most recently updated loaded thread in the remote app server.
+    #[clap(skip)]
+    pub attach_latest_loaded: bool,
+
     // Internal controls set by the top-level `codex fork` subcommand.
     // These are not exposed as user flags on the base `codex` command.
     #[clap(skip)]
@@ -70,6 +74,10 @@ pub struct Cli {
     /// Runs the TUI in inline mode, preserving terminal scrollback history.
     #[arg(long = "no-alt-screen", default_value_t = false)]
     pub no_alt_screen: bool,
+
+    /// Run this TUI through the local app-server daemon so another same-host terminal can attach.
+    #[arg(long = "attachable", default_value_t = false)]
+    pub attachable: bool,
 
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
@@ -190,6 +198,20 @@ mod tests {
         let cli = Cli::try_parse_from(["codex", "--legacy-ui"]).expect("valid cli");
 
         assert!(!cli.redesigned_ui_enabled());
+    }
+
+    #[test]
+    fn attachable_flag_enables_attachable_mode() {
+        let cli = Cli::try_parse_from(["codex", "--attachable"]).expect("valid cli");
+
+        assert!(cli.attachable);
+    }
+
+    #[test]
+    fn attach_internal_mode_is_not_user_parseable() {
+        let cli = Cli::try_parse_from(["codex"]).expect("valid cli");
+
+        assert!(!cli.attach_latest_loaded);
     }
 
     #[test]
