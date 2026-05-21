@@ -46,13 +46,17 @@ pidfile-backed detached process, and launches a detached updater loop.
 
 ## Installation and update cases
 
-The daemon assumes Codex is installed through `install.sh` and always launches
-the standalone managed binary under `CODEX_HOME`.
+Explicit `codex app-server daemon ...` lifecycle commands assume Codex is
+installed through `install.sh` and launch the standalone managed binary under
+`CODEX_HOME`. Top-level `codex remote-control` and attachable TUI startup use
+that managed install when it exists; when it does not, they start the current
+Codex executable with remote control enabled and do not enable auto-update.
 
 | Situation | What starts | Does this daemon fetch new binaries? | Does a running app-server eventually move to a newer binary on its own? |
 | --- | --- | --- | --- |
 | `install.sh` has run, but only `start` is used | `start` uses `CODEX_HOME/packages/standalone/current/codex` | No | No. The managed path is used when starting or restarting, but no updater is installed. |
 | `install.sh` has run, then `bootstrap` is used | The pidfile backend uses `CODEX_HOME/packages/standalone/current/codex` | Yes. Bootstrap launches a detached updater loop that runs `install.sh` hourly. | Yes, while that updater process is alive and app-server is already running. After a successful fetch, the updater restarts app-server with the refreshed binary and only then replaces its own process image. |
+| No standalone managed install, and `codex remote-control` or `codex --attachable` is used | The current Codex executable | No | No. The daemon is restarted only by an explicit command or by replacing the surrounding package/deployment. |
 | Some other tool updates the managed binary path | The next fresh start or restart uses the updated file at that path | Only if `bootstrap` is active, because the updater still runs `install.sh` on its normal cadence. | Without `bootstrap`, no. With `bootstrap`, the next successful updater pass compares the managed binary contents after `install.sh` runs; if app-server is running and they differ from the updater's current image, it refreshes app-server first and then itself. |
 
 ### Standalone installs
@@ -93,8 +97,9 @@ for future starts. If a managed app-server is already running, they restart it
 so the new setting takes effect immediately.
 
 Top-level `codex remote-control` bootstraps with `--remote-control` when the
-updater loop is not running. Otherwise it enables remote control and starts the
-daemon normally.
+updater loop is not running and the standalone managed install exists. Without
+that install, it starts the current Codex executable with remote control enabled
+and leaves auto-update disabled.
 
 `stop` sends a graceful termination request first, then sends a second
 termination signal after the grace window if the process is still alive.

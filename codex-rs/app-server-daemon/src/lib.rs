@@ -117,6 +117,13 @@ pub enum RemoteControlStatus {
     AlreadyDisabled,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RemoteControlStartBackend {
+    ManagedStart,
+    ManagedBootstrap,
+    CurrentExecutable,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteControlOutput {
@@ -414,20 +421,31 @@ impl Daemon {
     async fn ensure_remote_control_started(&self) -> Result<RemoteControlStartOutput> {
         let _operation_lock = self.acquire_operation_lock().await?;
         let settings = self.load_settings().await?;
-        if self.is_bootstrapped(&settings).await? {
-            let _ = self
-                .set_remote_control_locked(RemoteControlMode::Enabled)
-                .await?;
-            let output = self.start().await?;
-            return Ok(RemoteControlStartOutput::Start(output));
+        let start_backend = remote_control_start_backend(
+            self.is_bootstrapped(&settings).await?,
+            self.managed_codex_bin.is_file(),
+        );
+        match start_backend {
+            RemoteControlStartBackend::ManagedStart => {
+                let _ = self
+                    .set_remote_control_locked(RemoteControlMode::Enabled)
+                    .await?;
+                let output = self.start().await?;
+                Ok(RemoteControlStartOutput::Start(output))
+            }
+            RemoteControlStartBackend::ManagedBootstrap => {
+                let output = self
+                    .bootstrap_locked(BootstrapOptions {
+                        remote_control_enabled: true,
+                    })
+                    .await?;
+                Ok(RemoteControlStartOutput::Bootstrap(output))
+            }
+            RemoteControlStartBackend::CurrentExecutable => self
+                .start_current_executable_with_remote_control(settings)
+                .await
+                .map(RemoteControlStartOutput::Start),
         }
-
-        let output = self
-            .bootstrap_locked(BootstrapOptions {
-                remote_control_enabled: true,
-            })
-            .await?;
-        Ok(RemoteControlStartOutput::Bootstrap(output))
     }
 
     async fn set_remote_control(&self, mode: RemoteControlMode) -> Result<RemoteControlOutput> {
@@ -555,6 +573,53 @@ impl Daemon {
         let backend =
             backend::pid_backend(self.backend_paths_with_bin(settings, managed_codex_bin));
         backend.start().await
+    }
+
+    async fn start_current_executable_with_remote_control(
+        &self,
+        previous_settings: DaemonSettings,
+    ) -> Result<LifecycleOutput> {
+        let current_exe =
+            std::env::current_exe().context("failed to resolve current Codex executable")?;
+        let backend = self.running_backend_instance(&previous_settings).await?;
+
+        if backend.is_none() && client::probe(&self.socket_path).await.is_ok() {
+            return Err(anyhow!(
+                "app server is running but is not managed by codex app-server daemon"
+            ));
+        }
+
+        let mut settings = previous_settings.clone();
+        settings.remote_control_enabled = true;
+        settings.save(&self.settings_file).await?;
+
+        let status = match backend {
+            Some(_) if previous_settings.remote_control_enabled => {
+                let info = self.wait_until_ready().await?;
+                return Ok(self.output(
+                    LifecycleStatus::AlreadyRunning,
+                    Some(BackendKind::Pid),
+                    /*pid*/ None,
+                    Some(info.app_server_version),
+                ));
+            }
+            Some(backend) => {
+                backend.stop().await?;
+                LifecycleStatus::Restarted
+            }
+            None => LifecycleStatus::Started,
+        };
+
+        let pid = self
+            .start_managed_backend_with_bin(&settings, &current_exe)
+            .await?;
+        let info = self.wait_until_ready().await?;
+        Ok(self.output(
+            status,
+            Some(BackendKind::Pid),
+            pid,
+            Some(info.app_server_version),
+        ))
     }
 
     async fn is_bootstrapped(&self, settings: &DaemonSettings) -> Result<bool> {
@@ -685,6 +750,19 @@ fn already_remote_control_status(mode: RemoteControlMode) -> RemoteControlStatus
     }
 }
 
+fn remote_control_start_backend(
+    is_bootstrapped: bool,
+    managed_codex_exists: bool,
+) -> RemoteControlStartBackend {
+    if is_bootstrapped {
+        RemoteControlStartBackend::ManagedStart
+    } else if managed_codex_exists {
+        RemoteControlStartBackend::ManagedBootstrap
+    } else {
+        RemoteControlStartBackend::CurrentExecutable
+    }
+}
+
 #[cfg(unix)]
 fn restart_decision(
     mode: RestartMode,
@@ -741,12 +819,14 @@ mod tests {
     use super::BootstrapStatus;
     use super::LifecycleOutput;
     use super::LifecycleStatus;
+    use super::RemoteControlStartBackend;
     use super::RemoteControlStartOutput;
     use super::RemoteControlStatus;
     use super::RestartDecision;
     use super::RestartIfRunningOutcome;
     use super::RestartMode;
     use super::UpdaterRefreshMode;
+    use super::remote_control_start_backend;
     use super::restart_decision;
     use super::should_reexec_updater;
     use crate::client::ProbeInfo;
@@ -838,6 +918,32 @@ mod tests {
                 RestartDecision::Restart,
                 RestartDecision::Restart,
             ]
+        );
+    }
+
+    #[test]
+    fn remote_control_start_uses_current_executable_without_managed_install() {
+        assert_eq!(
+            remote_control_start_backend(
+                /*is_bootstrapped*/ false, /*managed_codex_exists*/ false
+            ),
+            RemoteControlStartBackend::CurrentExecutable
+        );
+    }
+
+    #[test]
+    fn remote_control_start_preserves_managed_install_paths() {
+        assert_eq!(
+            remote_control_start_backend(
+                /*is_bootstrapped*/ true, /*managed_codex_exists*/ false
+            ),
+            RemoteControlStartBackend::ManagedStart
+        );
+        assert_eq!(
+            remote_control_start_backend(
+                /*is_bootstrapped*/ false, /*managed_codex_exists*/ true
+            ),
+            RemoteControlStartBackend::ManagedBootstrap
         );
     }
 
