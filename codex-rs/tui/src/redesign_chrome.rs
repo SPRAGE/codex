@@ -2189,6 +2189,7 @@ fn starts_bubble_prose_run(line: &Line<'_>) -> bool {
 fn is_structural_text_line(text: &str) -> bool {
     text.starts_with(['>', '|', '#'])
         || is_prewrapped_table_grid_text(text)
+        || is_shell_command_text(text)
         || text.starts_with("```")
         || text.starts_with("---")
         || text.starts_with("***")
@@ -2196,6 +2197,68 @@ fn is_structural_text_line(text: &str) -> bool {
         || text.starts_with("* ")
         || text.starts_with("+ ")
         || list_marker_width(text).is_some()
+}
+
+fn is_shell_command_text(text: &str) -> bool {
+    let text = text.trim_start();
+    if text.starts_with("$ ") || text.starts_with("./") || text.starts_with("../") {
+        return true;
+    }
+
+    let Some(command) = first_command_token(text) else {
+        return false;
+    };
+    let command = command.rsplit('/').next().unwrap_or(command);
+    matches!(
+        command,
+        "awk"
+            | "bash"
+            | "bun"
+            | "cargo"
+            | "chmod"
+            | "cp"
+            | "curl"
+            | "deno"
+            | "docker"
+            | "git"
+            | "grep"
+            | "just"
+            | "kubectl"
+            | "ls"
+            | "mkdir"
+            | "mv"
+            | "nix"
+            | "node"
+            | "npm"
+            | "pnpm"
+            | "python"
+            | "python3"
+            | "rg"
+            | "rm"
+            | "sed"
+            | "sh"
+            | "uv"
+            | "uvx"
+            | "yarn"
+            | "zsh"
+    )
+}
+
+fn first_command_token(text: &str) -> Option<&str> {
+    text.split_whitespace().find(|token| {
+        !matches!(*token, "sudo" | "env" | "time" | "command") && !is_env_assignment_token(token)
+    })
+}
+
+fn is_env_assignment_token(token: &str) -> bool {
+    let Some((name, _)) = token.split_once('=') else {
+        return false;
+    };
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
+        && name.chars().any(|ch| ch.is_ascii_uppercase())
 }
 
 fn list_marker_width(text: &str) -> Option<usize> {
@@ -2218,6 +2281,19 @@ fn is_prewrapped_table_grid_text(text: &str) -> bool {
     let table_text = strip_blockquote_markers(text);
     table_text.starts_with(['┌', '├', '└'])
         || table_text.starts_with('│') && table_text.contains('│')
+        || is_markdown_table_separator_text(table_text)
+}
+
+fn is_markdown_table_separator_text(text: &str) -> bool {
+    let mut has_separator = false;
+    for ch in text.chars() {
+        match ch {
+            '━' => has_separator = true,
+            ' ' => {}
+            _ => return false,
+        }
+    }
+    has_separator
 }
 
 fn strip_blockquote_markers(mut text: &str) -> &str {
@@ -3339,8 +3415,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn bubble_lines_keeps_adjacent_shell_commands_distinct() {
+        let block = TranscriptBlock {
+            role: TranscriptRole::Codex,
+            speaker_label: None,
+            lines: vec![
+                Line::from("cargo fmt -p codex-cli -p codex-tui"),
+                Line::from("cargo check -p codex-cli -p codex-tui"),
+            ],
+        };
+
+        let lines = bubble_lines(&block, /*area_width*/ 132)
+            .iter()
+            .map(plain_line_text)
+            .collect::<Vec<_>>();
+        let rendered = lines.join("\n");
+
+        assert!(rendered.contains("cargo fmt -p codex-cli -p codex-tui"));
+        assert!(rendered.contains("cargo check -p codex-cli -p codex-tui"));
+        assert!(
+            !rendered.contains("codex-tui cargo check"),
+            "adjacent shell commands should not be reflowed into one paragraph: {lines:?}"
+        );
+    }
+
     #[tokio::test]
-    async fn transcript_render_preserves_markdown_table_grid_rows() {
+    async fn transcript_render_preserves_markdown_table_separator_rows() {
         let mut app = crate::app::test_support::make_test_app().await;
         let cwd = app.config.cwd.clone();
         app.transcript_cells = vec![std::sync::Arc::new(history_cell::AgentMarkdownCell::new(
@@ -3363,29 +3464,24 @@ mod tests {
         .map(plain_line_text)
         .collect::<Vec<_>>();
 
+        let separator_rows = lines
+            .iter()
+            .filter(|line| line.contains('━'))
+            .collect::<Vec<_>>();
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains('┌') && line.contains('┐')),
-            "expected table top border to stay on one bubble line, got: {lines:?}"
+                .any(|line| line.contains("Command") && line.contains("Result")),
+            "expected table header row to stay on one bubble line, got: {lines:?}"
+        );
+        assert_eq!(
+            separator_rows.len(),
+            1,
+            "expected table separator row to stay on one bubble line, got: {lines:?}"
         );
         assert!(
-            lines
-                .iter()
-                .any(|line| line.contains('├') && line.contains('┤')),
-            "expected table separator border to stay on one bubble line, got: {lines:?}"
-        );
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains('└') && line.contains('┘')),
-            "expected table bottom border to stay on one bubble line, got: {lines:?}"
-        );
-        assert!(
-            !lines
-                .iter()
-                .any(|line| line.contains('┌') && !line.contains('┐')),
-            "table top border should not be split by bubble wrapping: {lines:?}"
+            separator_rows[0].matches('━').count() > 40,
+            "table separator should preserve both table columns, got: {lines:?}"
         );
     }
 
