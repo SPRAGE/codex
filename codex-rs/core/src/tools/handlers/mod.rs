@@ -6,6 +6,8 @@ mod dynamic;
 pub(crate) mod extension_tools;
 mod goal;
 pub(crate) mod goal_spec;
+mod list_available_plugins_to_install;
+pub(crate) mod list_available_plugins_to_install_spec;
 mod mcp;
 mod mcp_resource;
 pub(crate) mod mcp_resource_spec;
@@ -54,6 +56,7 @@ pub use dynamic::DynamicToolHandler;
 pub use goal::CreateGoalHandler;
 pub use goal::GetGoalHandler;
 pub use goal::UpdateGoalHandler;
+pub use list_available_plugins_to_install::ListAvailablePluginsToInstallHandler;
 pub use mcp::McpHandler;
 pub use mcp_resource::ListMcpResourceTemplatesHandler;
 pub use mcp_resource::ListMcpResourcesHandler;
@@ -247,7 +250,8 @@ pub(super) fn implicit_granted_permissions(
 
 pub(super) async fn apply_granted_turn_permissions(
     session: &Session,
-    cwd: &std::path::Path,
+    environment_id: &str,
+    cwd: &Path,
     sandbox_permissions: SandboxPermissions,
     additional_permissions: Option<AdditionalPermissionProfile>,
 ) -> EffectiveAdditionalPermissions {
@@ -259,8 +263,8 @@ pub(super) async fn apply_granted_turn_permissions(
         };
     }
 
-    let granted_session_permissions = session.granted_session_permissions().await;
-    let granted_turn_permissions = session.granted_turn_permissions().await;
+    let granted_session_permissions = session.granted_session_permissions(environment_id).await;
+    let granted_turn_permissions = session.granted_turn_permissions(environment_id).await;
     let granted_permissions = merge_permission_profiles(
         granted_session_permissions.as_ref(),
         granted_turn_permissions.as_ref(),
@@ -441,7 +445,7 @@ mod tests {
                         path: FileSystemPath::GlobPattern {
                             pattern: "**/*.env".to_string(),
                         },
-                        access: FileSystemAccessMode::None,
+                        access: FileSystemAccessMode::Deny,
                     },
                 ],
                 glob_scan_max_depth: None,

@@ -188,6 +188,11 @@ pub(crate) enum AppEvent {
         result: Result<AppServerStartedThread, String>,
     },
 
+    /// Result of the fresh startup thread that is attached after the input UI is live.
+    StartupThreadStarted {
+        result: Result<AppServerStartedThread, String>,
+    },
+
     /// Clear the terminal UI (screen + scrollback), start a fresh session, and keep the
     /// previous chat resumable.
     ClearUi,
@@ -211,6 +216,9 @@ pub(crate) enum AppEvent {
     /// Resume a thread by UUID or thread name inside the running TUI session.
     ResumeSessionByIdOrName(String),
 
+    /// Archive the current active main thread and exit after it succeeds.
+    ArchiveCurrentThread,
+
     /// Fork the current session into a new thread.
     ForkCurrentSession,
 
@@ -232,6 +240,9 @@ pub(crate) enum AppEvent {
     /// Forward a command to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
     CodexOp(AppCommand),
+
+    /// Restore an output-free interrupted turn into the composer and roll it back.
+    RestoreCancelledTurn(UserMessage),
 
     /// Approve one retry of a recent auto-review denial selected in the TUI.
     ApproveRecentAutoReviewDenial {
@@ -360,6 +371,11 @@ pub(crate) enum AppEvent {
 
     /// Refresh app connector state and mention bindings.
     RefreshConnectors {
+        force_refetch: bool,
+    },
+
+    /// Fetch app connector state from the app server after the widget accepts a refresh request.
+    FetchConnectorsList {
         force_refetch: bool,
     },
 
@@ -542,12 +558,14 @@ pub(crate) enum AppEvent {
     /// Fetch MCP inventory via app-server RPCs and render it into history.
     FetchMcpInventory {
         detail: McpServerStatusDetail,
+        thread_id: Option<ThreadId>,
     },
 
     /// Result of fetching MCP inventory via app-server RPCs.
     McpInventoryLoaded {
         result: Result<Vec<McpServerStatus>, String>,
         detail: McpServerStatusDetail,
+        thread_id: Option<ThreadId>,
     },
 
     /// Result of the startup skills refresh that runs after the first frame is scheduled.
@@ -686,6 +704,7 @@ pub(crate) enum AppEvent {
     OpenFullAccessConfirmation {
         preset: ApprovalPreset,
         return_to_permissions: bool,
+        profile_selection: Option<PermissionProfileSelection>,
     },
 
     /// Open the Windows world-writable directories warning.
@@ -695,6 +714,7 @@ pub(crate) enum AppEvent {
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     OpenWorldWritableWarningConfirmation {
         preset: Option<ApprovalPreset>,
+        profile_selection: Option<PermissionProfileSelection>,
         /// Up to 3 sample world-writable directories to display in the warning.
         sample_paths: Vec<String>,
         /// If there are more than `sample_paths`, this carries the remaining count.
@@ -707,24 +727,28 @@ pub(crate) enum AppEvent {
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     OpenWindowsSandboxEnablePrompt {
         preset: ApprovalPreset,
+        profile_selection: Option<PermissionProfileSelection>,
     },
 
     /// Open the Windows sandbox fallback prompt after declining or failing elevation.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     OpenWindowsSandboxFallbackPrompt {
         preset: ApprovalPreset,
+        profile_selection: Option<PermissionProfileSelection>,
     },
 
     /// Begin the elevated Windows sandbox setup flow.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     BeginWindowsSandboxElevatedSetup {
         preset: ApprovalPreset,
+        profile_selection: Option<PermissionProfileSelection>,
     },
 
     /// Begin the non-elevated Windows sandbox setup flow.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     BeginWindowsSandboxLegacySetup {
         preset: ApprovalPreset,
+        profile_selection: Option<PermissionProfileSelection>,
     },
 
     /// Begin a non-elevated grant of read access for an additional directory.
@@ -745,6 +769,7 @@ pub(crate) enum AppEvent {
     EnableWindowsSandboxForAgentMode {
         preset: ApprovalPreset,
         mode: WindowsSandboxEnableMode,
+        profile_selection: Option<PermissionProfileSelection>,
     },
 
     /// Update the Windows sandbox feature mode without changing approval presets.
@@ -755,6 +780,9 @@ pub(crate) enum AppEvent {
 
     /// Update the current built-in active permission profile in the running app and widget.
     UpdateActivePermissionProfile(ActivePermissionProfile),
+
+    /// Select a named permission profile, optionally applying built-in mode settings too.
+    SelectPermissionProfile(PermissionProfileSelection),
 
     /// Update the current approvals reviewer in the running app and widget.
     UpdateApprovalsReviewer(ApprovalsReviewer),
@@ -993,6 +1021,15 @@ pub(crate) enum AppEvent {
         context: String,
         action: String,
     },
+}
+
+/// Named profile selection to apply after any required UI guardrails complete.
+#[derive(Debug, Clone)]
+pub(crate) struct PermissionProfileSelection {
+    pub profile_id: String,
+    pub approval_policy: Option<AskForApproval>,
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+    pub display_label: String,
 }
 
 #[derive(Debug)]

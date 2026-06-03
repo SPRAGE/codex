@@ -12,7 +12,7 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
-use codex_config::CloudRequirementsLoader;
+use codex_config::CloudConfigBundleLoader;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
@@ -28,7 +28,6 @@ use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
-use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
@@ -50,7 +49,7 @@ use crate::PathBufExt;
 use crate::TempDirExt;
 use crate::get_remote_test_env;
 use crate::load_default_config_for_test;
-use crate::load_default_config_for_test_with_cloud_requirements;
+use crate::load_default_config_for_test_with_cloud_config_bundle;
 use crate::responses::WebSocketTestServer;
 use crate::responses::output_value_to_text;
 use crate::responses::start_mock_server;
@@ -184,10 +183,9 @@ fn docker_command_capture_stdout<const N: usize>(args: [&str; N]) -> Result<Stri
     String::from_utf8(output.stdout).context("docker stdout must be utf-8")
 }
 
-/// A collection of different ways the model can output an apply_patch call
+/// Non-default apply_patch model output shapes used by compatibility tests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ApplyPatchModelOutput {
-    Freeform,
     ShellCommandViaHeredoc,
 }
 
@@ -198,8 +196,7 @@ pub enum ShellModelOutput {
     // UnifiedExec has its own set of tests
 }
 
-/// Returns the permission fields required by `Op::UserTurn` for tests that
-/// construct the op directly.
+/// Returns the permission fields required by test thread-settings overrides.
 pub fn turn_permission_fields(
     permission_profile: PermissionProfile,
     cwd: &Path,
@@ -216,7 +213,7 @@ pub struct TestCodexBuilder {
     pre_build_hooks: Vec<Box<PreBuildHook>>,
     workspace_setups: Vec<Box<WorkspaceSetup>>,
     home: Option<Arc<TempDir>>,
-    cloud_requirements: Option<CloudRequirementsLoader>,
+    cloud_config_bundle: Option<CloudConfigBundleLoader>,
     user_shell_override: Option<Shell>,
     exec_server_url: Option<String>,
 }
@@ -265,8 +262,11 @@ impl TestCodexBuilder {
         self
     }
 
-    pub fn with_cloud_requirements(mut self, cloud_requirements: CloudRequirementsLoader) -> Self {
-        self.cloud_requirements = Some(cloud_requirements);
+    pub fn with_cloud_config_bundle(
+        mut self,
+        cloud_config_bundle: CloudConfigBundleLoader,
+    ) -> Self {
+        self.cloud_config_bundle = Some(cloud_config_bundle);
         self
     }
 
@@ -433,7 +433,7 @@ impl TestCodexBuilder {
         } else {
             codex_exec_server::EnvironmentManager::create_for_tests(
                 exec_server_url,
-                local_runtime_paths,
+                Some(local_runtime_paths),
             )
             .await
         });
@@ -548,8 +548,8 @@ impl TestCodexBuilder {
         for hook in self.pre_build_hooks.drain(..) {
             hook(home.path());
         }
-        let mut config = if let Some(cloud_requirements) = self.cloud_requirements.take() {
-            load_default_config_for_test_with_cloud_requirements(home, cloud_requirements).await
+        let mut config = if let Some(cloud_config_bundle) = self.cloud_config_bundle.take() {
+            load_default_config_for_test_with_cloud_config_bundle(home, cloud_config_bundle).await
         } else {
             load_default_config_for_test(home).await
         };
@@ -669,13 +669,13 @@ impl TestCodex {
     pub async fn submit_turn_with_service_tier(
         &self,
         prompt: &str,
-        service_tier: Option<ServiceTier>,
+        service_tier: Option<&str>,
     ) -> Result<()> {
         self.submit_turn_with_permission_profile_context(
             prompt,
             AskForApproval::Never,
             PermissionProfile::Disabled,
-            Some(service_tier.map(|service_tier| service_tier.request_value().to_string())),
+            Some(service_tier.map(str::to_string)),
             /*environments*/ None,
         )
         .await
@@ -762,24 +762,31 @@ impl TestCodex {
             turn_permission_fields(permission_profile, self.config.cwd.as_path());
         let session_model = self.session_configured.model.clone();
         self.codex
-            .submit(Op::UserTurn {
-                environments,
+            .submit(Op::UserInput {
                 items: vec![UserInput::Text {
                     text: prompt.into(),
                     text_elements: Vec::new(),
                 }],
+                environments,
                 final_output_json_schema: None,
-                cwd: self.config.cwd.to_path_buf(),
-                approval_policy,
-                approvals_reviewer: None,
-                sandbox_policy,
-                permission_profile,
-                model: session_model,
-                effort: None,
-                summary: None,
-                service_tier,
-                collaboration_mode: None,
-                personality: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+                thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                    cwd: Some(self.config.cwd.to_path_buf()),
+                    approval_policy: Some(approval_policy),
+                    sandbox_policy: Some(sandbox_policy),
+                    permission_profile,
+                    service_tier,
+                    collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                        mode: codex_protocol::config_types::ModeKind::Default,
+                        settings: codex_protocol::config_types::Settings {
+                            model: session_model,
+                            reasoning_effort: None,
+                            developer_instructions: None,
+                        },
+                    }),
+                    ..Default::default()
+                },
             })
             .await?;
 
@@ -977,21 +984,8 @@ impl TestCodexHarness {
         custom_tool_call_output_text(&bodies, call_id)
     }
 
-    pub async fn apply_patch_output(
-        &self,
-        call_id: &str,
-        output_type: ApplyPatchModelOutput,
-    ) -> String {
-        // Box the awaited output helpers so callers do not inline request
-        // capture and response parsing into their own async state.
-        match output_type {
-            ApplyPatchModelOutput::Freeform => {
-                Box::pin(self.custom_tool_call_output(call_id)).await
-            }
-            ApplyPatchModelOutput::ShellCommandViaHeredoc => {
-                Box::pin(self.function_call_stdout(call_id)).await
-            }
-        }
+    pub async fn apply_patch_output(&self, call_id: &str) -> String {
+        self.custom_tool_call_output(call_id).await
     }
 }
 
@@ -1040,7 +1034,7 @@ pub fn test_codex() -> TestCodexBuilder {
         pre_build_hooks: vec![],
         workspace_setups: vec![],
         home: None,
-        cloud_requirements: None,
+        cloud_config_bundle: None,
         user_shell_override: None,
         exec_server_url: None,
     }
