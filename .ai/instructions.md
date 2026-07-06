@@ -2,17 +2,19 @@
 
 ## Project
 
-Codex fork - a personal fork of the open source OpenAI Codex CLI, optimized for
-Shaun's local development workflow while staying close to upstream.
+PROJECTNAME - TODO: replace with one-line description.
 
 ## Read Order
 
-1. `AI.md`
-2. `.ai/instructions.md`
-3. `.ai/context/active-context.md`
-4. `.ai/context/architecture-snapshot.md`
-5. `.ai/context/conventions.md`
-6. `.ai/context/decisions.md`
+- Always: `AI.md`, `.ai/instructions.md`.
+- Before code or design work: `.ai/context/architecture-snapshot.md`, `.ai/context/conventions.md`.
+- When relevant: `.ai/context/decisions.md` (architectural decisions); `.ai/context/active-context.md` (only when it holds real rolling state).
+
+## Response Style
+
+- Answer first; no preamble or filler.
+- Cite evidence (file:line, command output) for repo claims; don't assert from memory.
+- Prefer concise diffs and summaries; don't restate context already loaded.
 
 ## Provider Adapters
 
@@ -28,9 +30,6 @@ Shaun's local development workflow while staying close to upstream.
 ## Commands
 
 - `nix develop` - enter dev shell.
-- `just fmt` - format Rust code.
-- `just fix -p <crate>` - run scoped Rust lint fixes.
-- `cargo test -p <crate>` - run a crate-specific Rust test from `codex-rs`.
 - `nix run github:SPRAGE/dev-template#sync-skills` - pull latest skills, Codex repo skills/config/custom agents, provider links, hooks, and AI context templates.
 - `nix run github:SPRAGE/dev-template#ai-doctor` - validate AI context files, shared skills, provider links, Codex config/custom agents, and provider-specific settings layout.
 
@@ -39,6 +38,5 @@ Shaun's local development workflow while staying close to upstream.
 - Treat `.ai/context/` as the shared project context source of truth.
 - Treat `.ai/skills/` as the shared skill source of truth.
 - Keep `.agents/skills/`, `.claude/skills/`, and `.codex/skills/` linked to `.ai/skills/`, preserving local provider-specific skills.
-- Preserve the OpenAI-specific skills restored from `.codex-bak/skills/` when refreshing dev-template assets.
 - Keep provider-specific runtime settings out of `.ai/`.
 - Do not edit permission or settings files unless the user explicitly asks for that settings change.
