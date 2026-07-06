@@ -196,7 +196,7 @@ impl App {
         self.agent_navigation
             .ordered_threads()
             .into_iter()
-            .map(|(thread_id, entry)| {
+            .filter_map(|(thread_id, entry)| {
                 let activity = self
                     .redesign_chat_activity
                     .get(&thread_id)
@@ -206,14 +206,19 @@ impl App {
                     } else {
                         redesign_chrome::RedesignChatActivity::Idle
                     });
-                redesign_chrome::RedesignChatListEntry {
+
+                if entry.is_closed || activity == redesign_chrome::RedesignChatActivity::Closed {
+                    return None;
+                }
+
+                Some(redesign_chrome::RedesignChatListEntry {
                     thread_id,
                     label: self.thread_label(thread_id),
                     activity,
                     is_active: self.active_thread_id == Some(thread_id),
                     unread: self.redesign_chat_unread.contains(&thread_id)
                         && self.active_thread_id != Some(thread_id),
-                }
+                })
             })
             .collect()
     }

@@ -497,6 +497,59 @@ async fn enqueue_thread_event_does_not_block_when_channel_full() -> Result<()> {
 }
 
 #[tokio::test]
+async fn redesign_chat_entries_hide_closed_threads() -> Result<()> {
+    let mut app = make_test_app().await;
+    let open_thread_id = ThreadId::new();
+    let metadata_closed_thread_id = ThreadId::new();
+    let notification_closed_thread_id = ThreadId::new();
+    app.primary_thread_id = Some(open_thread_id);
+    app.active_thread_id = Some(open_thread_id);
+    app.upsert_agent_picker_thread(
+        open_thread_id,
+        Some("Open".to_string()),
+        /*agent_role*/ None,
+        /*is_closed*/ false,
+    );
+    app.upsert_agent_picker_thread(
+        metadata_closed_thread_id,
+        Some("Metadata closed".to_string()),
+        /*agent_role*/ None,
+        /*is_closed*/ true,
+    );
+    app.upsert_agent_picker_thread(
+        notification_closed_thread_id,
+        Some("Notification closed".to_string()),
+        /*agent_role*/ None,
+        /*is_closed*/ false,
+    );
+
+    app.enqueue_thread_notification(
+        notification_closed_thread_id,
+        thread_closed_notification(notification_closed_thread_id),
+    )
+    .await?;
+
+    assert_eq!(
+        app.redesign_chat_entries()
+            .into_iter()
+            .map(|entry| entry.thread_id)
+            .collect::<Vec<_>>(),
+        vec![open_thread_id]
+    );
+    assert!(
+        app.agent_navigation
+            .get(&metadata_closed_thread_id)
+            .is_some()
+    );
+    assert!(
+        app.agent_navigation
+            .get(&notification_closed_thread_id)
+            .is_some()
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn replay_thread_snapshot_restores_draft_and_queued_input() {
     let mut app = make_test_app().await;
     let thread_id = ThreadId::new();

@@ -1386,6 +1386,7 @@ mod tests {
         let mut app = make_test_app().await;
         app.redesign_chrome_enabled = true;
         let first_thread_id = ThreadId::new();
+        let closed_thread_id = ThreadId::new();
         let second_thread_id = ThreadId::new();
         app.primary_thread_id = Some(first_thread_id);
         app.active_thread_id = Some(first_thread_id);
@@ -1394,6 +1395,12 @@ mod tests {
             /*agent_nickname*/ None,
             /*agent_role*/ None,
             /*is_closed*/ false,
+        );
+        app.upsert_agent_picker_thread(
+            closed_thread_id,
+            Some("Closed".to_string()),
+            /*agent_role*/ None,
+            /*is_closed*/ true,
         );
         app.upsert_agent_picker_thread(
             second_thread_id,
