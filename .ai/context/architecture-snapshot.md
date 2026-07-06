@@ -1,47 +1,27 @@
 # Architecture Snapshot
 
+<!-- TEMPLATE: Capture the current shape of the system. Refresh with /cc-refresh. -->
+
 ## Stack
 
-- Rust workspace under `codex-rs/`.
-- Node/pnpm metadata for npm package distribution and repo-wide formatting.
-- Bazel, Nix, and `just` for development and CI workflows.
-- SPRAGE dev-template for shared AI context, shared skills, provider adapters,
-  and Codex custom agents.
+- TODO: Languages, frameworks, tools, and runtime requirements.
 
 ## Project Structure
 
-- `codex-rs/` - Rust crates for Codex CLI, TUI, app server, protocols, MCP,
-  sandboxing, auth, state, and supporting libraries.
-- `codex-cli/` - npm-facing CLI package assets.
-- `sdk/` - SDK packages and runtime support.
-- `.ai/` - provider-neutral AI instructions, context, and shared skills.
-- `.agents/` - Codex repo-scoped skill view.
-- `.codex/` - Codex project config, custom agents, environment config, and
-  compatibility skill view.
-- `.claude/` - Claude Code settings, hooks, and shared skill view.
+- TODO: Important directories and what they contain.
 
 ## Entry Points
 
-- `codex-rs/cli` builds the `codex` binary.
-- `codex-rs/tui` owns the terminal UI.
-- `codex-rs/app-server` exposes app-server behavior.
-- `justfile` defines common local commands from the repository root.
+- TODO: Main binaries, services, commands, pages, APIs, or jobs.
 
 ## Data Flow
 
-- CLI and TUI operations route through Rust crates under `codex-rs/`.
-- MCP and app-server API boundaries are handled in the dedicated protocol,
-  app-server, and MCP crates.
-- Shared AI skill discovery resolves through `.ai/skills/`, with provider
-  paths linking back to the shared catalog.
+- TODO: Key data paths, external systems, and persistence boundaries.
 
 ## Deployment / Runtime
 
-- Local development uses `nix develop`, `just`, Cargo, Bazel, and pnpm as
-  needed.
-- Release and package workflows remain governed by the upstream Codex project
-  structure.
+- TODO: How the project runs locally and in production.
 
 ## Known Gaps
 
-- Refresh this snapshot after larger fork-specific changes.
+- TODO: Architectural unknowns or areas that need verification.

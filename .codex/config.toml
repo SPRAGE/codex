@@ -2,7 +2,7 @@
 # Codex loads this file only after the project is trusted.
 
 project_doc_max_bytes = 65536
-project_doc_fallback_filenames = ["AI.md", "CODEX.md", "CLAUDE.md"]
+project_doc_fallback_filenames = ["AI.md", "AGENTS.md", "CODEX.md"]
 model_reasoning_effort = "medium"
 web_search = "cached"
 personality = "pragmatic"
@@ -16,9 +16,3 @@ max_depth = 1
 
 [mcp_servers.openaiDeveloperDocs]
 url = "https://developers.openai.com/mcp"
-
-[mcp_servers.stitch]
-command = "npx"
-args = ["-y", "@_davideast/stitch-mcp", "proxy"]
-env_vars = ["STITCH_API_KEY"]
-startup_timeout_sec = 60.0
