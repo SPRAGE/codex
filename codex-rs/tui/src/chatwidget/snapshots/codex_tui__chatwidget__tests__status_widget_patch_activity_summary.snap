@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+expression: "rendered_chatwidget_snapshot(&chat, 80)"
+---
+"                                                                                "
+"• Editing 2 files (0s • esc to interrupt)                                       "
+"  └ src/app.rs, src/status.rs                                                   "
+"                                                                                "
+"                                                                                "
+"› Ask Codex to do anything                                                      "
+"                                                                                "
+"  gpt-5.5 default · /tmp/project                                                "

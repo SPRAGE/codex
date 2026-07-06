@@ -9,6 +9,10 @@ use codex_utils_path_uri::LegacyAppPathString;
 impl ChatWidget {
     pub(super) fn on_patch_apply_begin(&mut self, changes: HashMap<PathBuf, FileChange>) {
         self.record_visible_turn_activity();
+        if self.bottom_pane.is_task_running() {
+            self.bottom_pane.ensure_status_indicator();
+            self.set_activity_status(ActivityStatus::patch(&changes, &self.config.cwd));
+        }
         self.add_to_history(history_cell::new_patch_event(changes, &self.config.cwd));
     }
 
@@ -165,6 +169,12 @@ impl ChatWidget {
         }
         // Mark that actual work was done (patch applied)
         self.transcript.had_work_activity = true;
+        if self.bottom_pane.is_task_running()
+            && !self.status_state.current_status.is_guardian_review()
+            && (self.mcp_startup_status.is_none() || !self.status_header_is_mcp_startup_owned())
+        {
+            self.restore_reasoning_status_header();
+        }
     }
 
     pub(crate) fn handle_mcp_tool_call_started_now(&mut self, item: ThreadItem) {
@@ -174,6 +184,7 @@ impl ChatWidget {
             server,
             tool,
             arguments,
+            app_context,
             ..
         } = item
         else {
@@ -181,6 +192,10 @@ impl ChatWidget {
         };
         self.flush_answer_stream_with_separator();
         self.flush_active_cell();
+        if self.bottom_pane.is_task_running() {
+            self.bottom_pane.ensure_status_indicator();
+            self.set_activity_status(ActivityStatus::mcp(&server, &tool, app_context.as_ref()));
+        }
         self.transcript.active_cell = Some(Box::new(history_cell::new_active_mcp_tool_call(
             id,
             McpInvocation {
@@ -253,6 +268,12 @@ impl ChatWidget {
         }
         // Mark that actual work was done (MCP tool call)
         self.transcript.had_work_activity = true;
+        if self.bottom_pane.is_task_running()
+            && !self.status_state.current_status.is_guardian_review()
+            && (self.mcp_startup_status.is_none() || !self.status_header_is_mcp_startup_owned())
+        {
+            self.restore_reasoning_status_header();
+        }
     }
 
     pub(crate) fn handle_queued_item_started_now(&mut self, item: ThreadItem) {

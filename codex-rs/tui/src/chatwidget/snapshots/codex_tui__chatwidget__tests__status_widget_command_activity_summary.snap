@@ -1,0 +1,14 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+expression: "rendered_chatwidget_snapshot(&chat, 80)"
+---
+"                                                                                "
+"• Running cargo test -p codex-tui                                               "
+"                                                                                "
+"• Running tests (0s • esc to interrupt)                                         "
+"  └ bash -lc cargo test -p codex-tui                                            "
+"                                                                                "
+"                                                                                "
+"› Ask Codex to do anything                                                      "
+"                                                                                "
+"  gpt-5.5 default · /tmp/project                                                "

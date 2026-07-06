@@ -64,6 +64,15 @@ impl ChatWidget {
         );
     }
 
+    pub(super) fn set_activity_status(&mut self, status: ActivityStatus) {
+        self.set_status(
+            status.header,
+            status.details,
+            StatusDetailsCapitalization::Preserve,
+            status.details_max_lines,
+        );
+    }
+
     /// Sets the currently rendered footer status-line value.
     pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) {
         self.bottom_pane.set_status_line(status_line);

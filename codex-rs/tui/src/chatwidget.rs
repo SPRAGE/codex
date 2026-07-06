@@ -323,6 +323,8 @@ use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
+mod activity_summary;
+use self::activity_summary::ActivityStatus;
 mod command_lifecycle;
 mod connectors;
 mod constructor;

@@ -218,8 +218,9 @@ impl ChatWidget {
             // Update the shimmer header to the extracted reasoning chunk header.
             self.status_state.terminal_title_status_kind = TerminalTitleStatusKind::Thinking;
             self.set_status_header(header);
-        } else {
-            // Fallback while we don't yet have a bold header: leave existing header as-is.
+        } else if self.status_state.current_status.header == "Working" {
+            self.status_state.terminal_title_status_kind = TerminalTitleStatusKind::Thinking;
+            self.set_activity_status(ActivityStatus::thinking());
         }
         self.request_redraw();
     }

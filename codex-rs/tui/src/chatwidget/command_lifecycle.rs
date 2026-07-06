@@ -341,6 +341,12 @@ impl ChatWidget {
             self.suppressed_exec_calls.insert(id);
             return;
         }
+        self.set_activity_status(ActivityStatus::command(
+            &command,
+            &parsed_cmd,
+            source,
+            &self.config.cwd,
+        ));
         if let Some(cell) = self
             .transcript
             .active_cell
@@ -513,6 +519,13 @@ impl ChatWidget {
         }
         // Mark that actual work was done (command executed)
         self.transcript.had_work_activity = true;
+        if self.running_commands.is_empty()
+            && self.bottom_pane.is_task_running()
+            && !self.status_state.current_status.is_guardian_review()
+            && (self.mcp_startup_status.is_none() || !self.status_header_is_mcp_startup_owned())
+        {
+            self.restore_reasoning_status_header();
+        }
         if is_user_shell {
             self.maybe_send_next_queued_input();
         }

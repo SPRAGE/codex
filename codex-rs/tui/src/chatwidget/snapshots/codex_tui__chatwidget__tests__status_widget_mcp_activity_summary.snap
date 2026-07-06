@@ -1,0 +1,14 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+expression: "rendered_chatwidget_snapshot(&chat, 80)"
+---
+"                                                                                "
+"• Calling figma.generate_figma_design({"fileKey":"abc123"})                     "
+"                                                                                "
+"• Using Figma: Generate design (0s • esc to interrupt)                          "
+"  └ figma.generate_figma_design                                                 "
+"                                                                                "
+"                                                                                "
+"› Ask Codex to do anything                                                      "
+"                                                                                "
+"  gpt-5.5 default · /tmp/project                                                "

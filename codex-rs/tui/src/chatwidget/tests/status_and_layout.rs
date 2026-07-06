@@ -2100,6 +2100,146 @@ async fn status_widget_active_snapshot() {
 }
 
 #[tokio::test]
+async fn status_widget_command_activity_summary_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    handle_turn_started(&mut chat, "turn-1");
+    let begin = begin_exec(&mut chat, "call-test", "cargo test -p codex-tui");
+
+    assert_eq!(chat.status_state.current_status.header, "Running tests");
+    assert_chatwidget_snapshot!(
+        "status_widget_command_activity_summary",
+        rendered_chatwidget_snapshot(&chat, /*width*/ 80)
+    );
+
+    end_exec(&mut chat, begin, "", "", /*exit_code*/ 0);
+
+    assert_eq!(chat.status_state.current_status.header, "Working");
+    assert_chatwidget_snapshot!(
+        "status_widget_command_completion_restores_working",
+        rendered_chatwidget_snapshot(&chat, /*width*/ 80)
+    );
+}
+
+#[tokio::test]
+async fn status_widget_patch_activity_summary_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    handle_turn_started(&mut chat, "turn-1");
+    let mut changes = HashMap::new();
+    changes.insert(
+        PathBuf::from("src/app.rs"),
+        FileChange::Update {
+            unified_diff: "@@ -1 +1 @@\n-old\n+new\n".to_string(),
+            move_path: None,
+        },
+    );
+    changes.insert(
+        PathBuf::from("src/status.rs"),
+        FileChange::Add {
+            content: "pub fn status() {}\n".to_string(),
+        },
+    );
+    chat.on_patch_apply_begin(changes.clone());
+
+    assert_eq!(chat.status_state.current_status.header, "Editing 2 files");
+    assert_chatwidget_snapshot!(
+        "status_widget_patch_activity_summary",
+        rendered_chatwidget_snapshot(&chat, /*width*/ 80)
+    );
+
+    handle_patch_apply_end(
+        &mut chat,
+        "patch-activity",
+        "turn-1",
+        changes,
+        AppServerPatchApplyStatus::Completed,
+    );
+
+    assert_eq!(chat.status_state.current_status.header, "Working");
+    assert_chatwidget_snapshot!(
+        "status_widget_patch_completion_restores_working",
+        rendered_chatwidget_snapshot(&chat, /*width*/ 80)
+    );
+}
+
+#[tokio::test]
+async fn status_widget_mcp_activity_summary_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    handle_turn_started(&mut chat, "turn-1");
+    chat.on_mcp_tool_call_started(mcp_activity_item(
+        codex_app_server_protocol::McpToolCallStatus::InProgress,
+        /*result*/ None,
+    ));
+
+    assert_eq!(
+        chat.status_state.current_status.header,
+        "Using Figma: Generate design"
+    );
+    assert_chatwidget_snapshot!(
+        "status_widget_mcp_activity_summary",
+        rendered_chatwidget_snapshot(&chat, /*width*/ 80)
+    );
+
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: chat.thread_id.map(|id| id.to_string()).unwrap_or_default(),
+            turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
+            item: mcp_activity_item(
+                codex_app_server_protocol::McpToolCallStatus::Completed,
+                Some(codex_app_server_protocol::McpToolCallResult {
+                    content: Vec::new(),
+                    structured_content: None,
+                    meta: None,
+                }),
+            ),
+        }),
+        /*replay_kind*/ None,
+    );
+
+    assert_eq!(chat.status_state.current_status.header, "Working");
+    assert_chatwidget_snapshot!(
+        "status_widget_mcp_completion_restores_working",
+        rendered_chatwidget_snapshot(&chat, /*width*/ 80)
+    );
+}
+
+fn mcp_activity_item(
+    status: codex_app_server_protocol::McpToolCallStatus,
+    result: Option<codex_app_server_protocol::McpToolCallResult>,
+) -> AppServerThreadItem {
+    AppServerThreadItem::McpToolCall {
+        id: "mcp-activity".to_string(),
+        server: "figma".to_string(),
+        tool: "generate_figma_design".to_string(),
+        status,
+        arguments: serde_json::json!({ "fileKey": "abc123" }),
+        app_context: Some(codex_app_server_protocol::McpToolCallAppContext {
+            connector_id: "figma-connector".to_string(),
+            link_id: None,
+            resource_uri: Some("app://figma".to_string()),
+            app_name: Some("Figma".to_string()),
+            template_id: None,
+            action_name: Some("Generate design".to_string()),
+        }),
+        mcp_app_resource_uri: None,
+        plugin_id: None,
+        result: result.map(Box::new),
+        error: None,
+        duration_ms: None,
+    }
+}
+
+fn rendered_chatwidget_snapshot(chat: &ChatWidget, width: u16) -> String {
+    let height = chat.desired_height(width);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height))
+        .expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw chatwidget");
+    normalized_backend_snapshot(terminal.backend())
+}
+
+#[tokio::test]
 async fn stream_error_updates_status_indicator() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.bottom_pane.set_task_running(/*running*/ true);
