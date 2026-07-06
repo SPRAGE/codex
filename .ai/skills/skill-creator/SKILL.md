@@ -13,11 +13,13 @@ description: >
 
 A skill for creating new skills, hookify rules, and iteratively improving them.
 
+**Runtime note:** Skill *authoring* (intent → draft → SKILL.md → references) is provider-neutral. The eval/benchmark loop below assumes subagents (Claude Code or Cowork); on Codex, dispatch test runs with `spawn_agent` or run them manually, and skip the browser viewer. Hookify rules and the `claude -p` description-optimizer are Claude-Code-specific — skip them on other runtimes.
+
 ## Mode Detection
 
 This skill handles two types of automation artifacts:
 
-1. **Skills** — Claude Code skills (SKILL.md files with YAML frontmatter). Use the full
+1. **Skills** — agent skills (SKILL.md files with YAML frontmatter). Use the full
    skill creation workflow below with evals, benchmarks, and description optimization.
 
 2. **Hookify Rules** — Automation guardrails (markdown files with YAML frontmatter and
@@ -35,7 +37,7 @@ At a high level, the process of creating a skill goes like this:
 
 - Decide what you want the skill to do and roughly how it should do it
 - Write a draft of the skill
-- Create a few test prompts and run claude-with-access-to-the-skill on them
+- Create a few test prompts and run an agent with access to the skill on them
 - Help the user evaluate the results both qualitatively and quantitatively
   - While the runs happen in the background, draft some quantitative evals if there aren't any (if there are some, you can either use as is or modify if you feel something needs to change about them). Then explain them to the user (or if they already existed, explain the ones that already exist)
   - Use the `eval-viewer/generate_review.py` script to show the user the results for them to look at, and also let them look at the quantitative metrics
@@ -50,8 +52,6 @@ On the other hand, maybe they already have a draft of the skill. In this case yo
 Of course, you should always be flexible and if the user is like "I don't need to run a bunch of evaluations, just vibe with me", you can do that instead.
 
 Then after the skill is done (but again, the order is flexible), you can also run the skill description improver, which we have a whole separate script for, to optimize the triggering of the skill.
-
-Cool? Cool.
 
 ## Communicating with the user
 
@@ -72,7 +72,7 @@ It's OK to briefly explain terms if you're in doubt, and feel free to clarify te
 
 Start by understanding the user's intent. The current conversation might already contain a workflow the user wants to capture (e.g., they say "turn this into a skill"). If so, extract answers from the conversation history first — the tools used, the sequence of steps, corrections the user made, input/output formats observed. The user may need to fill the gaps, and should confirm before proceeding to the next step.
 
-1. What should this skill enable Claude to do?
+1. What should this skill enable the agent to do?
 2. When should this skill trigger? (what user phrases/contexts)
 3. What's the expected output format?
 4. Should we set up test cases to verify the skill works? Skills with objectively verifiable outputs (file transforms, data extraction, code generation, fixed workflow steps) benefit from test cases. Skills with subjective outputs (writing style, art) often don't need them. Suggest the appropriate default based on the skill type, but let the user decide.
@@ -500,15 +500,14 @@ Repeating one more time the core loop here for emphasis:
 
 Please add steps to your TodoList, if you have such a thing, to make sure you don't forget. If you're in Cowork, please specifically put "Create evals JSON and run `eval-viewer/generate_review.py` so human can review test cases" in your TodoList to make sure it happens.
 
-Good luck!
-
 ---
 
-## Creating Hookify Rules
+## Creating Hookify Rules (Claude Code)
 
-Hookify rules are a simpler automation artifact — markdown files with YAML frontmatter
-that define patterns to watch for and messages to show when those patterns match. They
-don't need the full eval framework; a quick regex validation is sufficient.
+Hookify rules are a Claude-Code-specific automation artifact — markdown files with YAML
+frontmatter that define patterns to watch for and messages to show when those patterns match
+(written under `.claude/`). They don't need the full eval framework; a quick regex validation
+is sufficient. Skip this section on runtimes without Claude Code hooks.
 
 ### Rule File Format
 

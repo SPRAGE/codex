@@ -2,9 +2,10 @@
 name: fresh-start
 description: >
   Removes AI, Codex, and Claude Code configuration and re-creates it from dev-template
-  defaults. Deletes .ai/, .agents/, .claude/, .codex/ managed files, AI.md, AGENTS.md, CODEX.md, CLAUDE.md, .mcp.json,
-  .claude.local.md — then restores shared AI context, provider adapters,
-  settings, hooks, skills, Codex repo skill links/config/custom agents, compatibility links, and MCP config. Preserves
+  defaults. Replaces flake.nix, deletes flake.lock, .ai/, .agents/, .claude/, .codex/ managed files,
+  AI.md, AGENTS.md, CODEX.md, CLAUDE.md, .mcp.json, .claude.local.md — then restores the template flake,
+  shared AI context, provider adapters, settings, hooks, skills, Codex repo skill links/config/custom agents,
+  compatibility links, and MCP config. Preserves
   auto-memory and .agents/.codex local runtime state. After reset, attempts nix-based skill sync; otherwise tells user
   to run direnv reload. Trigger when user says "fresh start", "reset claude
   code", "start fresh", "nuke claude config", "clean slate", "reset everything",
@@ -13,11 +14,11 @@ description: >
 
 # Fresh Start
 
-Removes all shared AI, Codex, and Claude Code configuration from the current project and re-creates it from dev-template defaults.
+Removes all shared AI, Codex, and Claude Code configuration from the current project, replaces `flake.nix`, removes `flake.lock`, and re-creates everything from dev-template defaults.
 
 **Preserves:** auto-memory (`~/.claude/projects/*/memory/`) and `.agents/local/`, `.agents/tmp/`, `.agents/sessions/`, `.agents/logs/`, `.codex/local/`, `.codex/tmp/`, `.codex/sessions/`, `.codex/logs/`
-**Deletes:** `.ai/`, `.agents/`, `.claude/`, managed `.codex/` files, `AI.md`, `AGENTS.md`, `CODEX.md`, `CLAUDE.md`, `.mcp.json`, `.claude.local.md`
-**Restores:** `.ai/`, `.agents/skills/`, `.codex/config.toml`, `.codex/agents/`, `.codex/skills/`, provider adapters, settings.json, hooks, skills, .mcp.json
+**Deletes:** `flake.nix`, `flake.lock`, `.ai/`, `.agents/`, `.claude/`, managed `.codex/` files, `AI.md`, `AGENTS.md`, `CODEX.md`, `CLAUDE.md`, `.mcp.json`, `.claude.local.md`
+**Restores:** `flake.nix`, `.ai/`, `.agents/skills/`, `.codex/config.toml`, `.codex/agents/`, `.codex/skills/`, provider adapters, settings.json, hooks, skills, .mcp.json
 
 ## Step 1: Scan
 
@@ -29,6 +30,8 @@ echo "=== Fresh Start: scanning current state ==="
 [ -d ".agents" ] && echo "  FOUND: .agents/" || echo "  MISSING: .agents/"
 [ -d ".claude" ] && echo "  FOUND: .claude/" || echo "  MISSING: .claude/"
 [ -d ".codex" ] && echo "  FOUND: .codex/" || echo "  MISSING: .codex/"
+[ -f "flake.nix" ] && echo "  FOUND: flake.nix" || echo "  MISSING: flake.nix"
+[ -f "flake.lock" ] && echo "  FOUND: flake.lock" || echo "  MISSING: flake.lock"
 [ -f "AI.md" ] && echo "  FOUND: AI.md" || echo "  MISSING: AI.md"
 [ -f "AGENTS.md" ] && echo "  FOUND: AGENTS.md" || echo "  MISSING: AGENTS.md"
 [ -f "CODEX.md" ] && echo "  FOUND: CODEX.md" || echo "  MISSING: CODEX.md"
@@ -42,7 +45,7 @@ echo "=== Fresh Start: scanning current state ==="
 ```
 
 Show the user what will be removed and ask for confirmation:
-> "This will delete managed AI/Codex/Claude config and re-create from dev-template defaults. Auto-memory and `.agents/local/`/`.codex/local/` runtime state are preserved. Continue?"
+> "This will replace `flake.nix`, delete `flake.lock`, delete managed AI/Codex/Claude config, and re-create from dev-template defaults. Auto-memory and `.agents/local/`/`.codex/local/` runtime state are preserved. Continue?"
 
 **Do NOT proceed without explicit user confirmation.**
 
@@ -63,7 +66,7 @@ for local_dir in local tmp sessions logs; do
   mv ".codex/$local_dir" "$preserve_dir/.codex/$local_dir"
 done
 rm -rf .ai .agents .claude .codex
-rm -f AI.md AGENTS.md CODEX.md CLAUDE.md .mcp.json .claude.local.md
+rm -f flake.nix flake.lock AI.md AGENTS.md CODEX.md CLAUDE.md .mcp.json .claude.local.md
 mkdir -p .agents
 if [ -d "$preserve_dir/.agents" ]; then
   mv "$preserve_dir/.agents"/* .agents/ 2>/dev/null || true
@@ -77,6 +80,8 @@ echo "Removed managed AI, Codex, and Claude Code configuration."
 ```
 
 ## Step 3: Re-create config from defaults
+
+Restore `flake.nix` from the current dev-template template first. If using the `nix run ...#fresh-start` app, this is automatic. If doing the reset manually, copy `template/flake.nix` from the same dev-template revision used for the reset.
 
 Create the directory structure:
 
@@ -529,6 +534,7 @@ After everything is done, tell the user:
 > **Fresh start complete.**
 >
 > Restored:
+> - `flake.nix` (current dev-template flake)
 > - `.ai/` (shared instructions and context)
 > - `.agents/skills/` (Codex repo-scoped skill link)
 > - `AI.md` (shared top-level guide)
@@ -540,6 +546,9 @@ After everything is done, tell the user:
 > - `.claude/settings.json` (plugins, permissions, hooks)
 > - `.claude/hooks/` (session-start, statusline)
 > - `.mcp.json` (context7)
+>
+> Removed:
+> - `flake.lock` (regenerate with the next `nix develop`, `direnv reload`, or `nix flake lock`)
 >
 > [If nix sync succeeded]: Skills synced: [count] skills from dev-template.
 > [If nix sync failed]: Run `direnv reload` or `nix develop` to sync skills from dev-template.

@@ -1,23 +1,26 @@
 ---
 name: cc-setup
 description: >
-  Set up, onboard, or optimize Claude Code for any project. Works in three modes:
-  (1) Greenfield — generates AI.md, provider adapters, .mcp.json, rules from a brainstorm brief or project
-  description. (2) Brownfield — scans an existing codebase to generate Claude Code config.
-  (3) Recommend — analyzes an existing setup and recommends automations (hooks, skills, MCP
-  servers, subagents, plugins). Use when the user says "set up Claude Code", "generate a
-  CLAUDE.md", "configure Claude Code", "onboard claude code", "bootstrap claude code",
-  "add claude code to this project", "what MCP servers should I use", "recommend automations",
-  "optimize my Claude Code setup", "improve Claude Code workflows", "prepare my project for
-  Claude Code", "what plugins for Claude Code", or any variation of configuring, onboarding,
-  or optimizing Claude Code for a project.
+  Set up, onboard, or optimize a project's AI-agent configuration for any runtime
+  (Claude Code, Codex, or both). Works in three modes: (1) Greenfield — generates AI.md,
+  .ai/ context, provider adapters (AGENTS.md/CODEX.md/CLAUDE.md), .mcp.json, and rules from a
+  brainstorm brief or project description. (2) Brownfield — scans an existing codebase to
+  generate that config. (3) Recommend — analyzes an existing setup and recommends automations
+  (hooks, skills, MCP servers, subagents, plugins). Use when the user says "set up Claude Code",
+  "set up Codex", "configure AI agents", "generate AGENTS.md", "generate a CLAUDE.md", "onboard
+  codex", "bootstrap claude code", "add AI config to this project", "what MCP servers should I
+  use", "recommend automations", "optimize my agent setup", "improve agent workflows", "prepare
+  my project for Claude Code or Codex", or any variation of configuring, onboarding, or
+  optimizing AI agents for a project.
 tools: Read, Glob, Grep, Bash, Edit, Write, Agent
 ---
 
-# Claude Code Setup
+# Project AI Setup
 
-Set up Claude Code for any project — whether starting fresh, onboarding an existing
-codebase, or optimizing an existing configuration.
+Set up a project's AI-agent configuration for any runtime (Claude Code, Codex, or both) —
+whether starting fresh, onboarding an existing codebase, or optimizing an existing setup.
+Outputs are provider-neutral (`.ai/`, `AI.md`) plus thin per-provider adapters; runtime-only
+artifacts (`.claude/` hooks/rules, `.codex/` config/agents) are written only for the runtimes in use.
 
 **This skill writes files.** It generates or updates `AI.md`, `.ai/instructions.md`,
 `.ai/context/`, `.codex/`, `AGENTS.md`, `CODEX.md`, `CLAUDE.md`, `.mcp.json`, and `.claude/rules/`.
@@ -30,8 +33,8 @@ Auto-detect the appropriate mode from context:
 | Signal | Mode |
 |--------|------|
 | Brainstorm brief in conversation, or user describes a new project | **Greenfield** |
-| Existing code but no/minimal Claude Code config | **Brownfield** |
-| Existing Claude Code config, user wants improvements | **Recommend** |
+| Existing code but no/minimal AI config | **Brownfield** |
+| Existing AI config, user wants improvements | **Recommend** |
 | User explicitly says "onboard" or "bootstrap" | **Brownfield** |
 | User explicitly says "recommend" or "optimize" | **Recommend** |
 
@@ -120,7 +123,7 @@ If `.ai/context/` exists:
 
 ## Recommend Mode
 
-The user has an existing Claude Code configuration and wants to optimize it.
+The user has an existing AI-agent configuration and wants to optimize it.
 
 **This mode is read-only.** It analyzes the codebase and outputs recommendations. It
 does NOT create or modify files unless the user asks.
@@ -278,10 +281,10 @@ suggest relevant automations:
 ### 8. Workflow Recommendations
 
 A short section (advice in your response, not a file) covering:
-- **Session workflow**: How to use Claude Code effectively for this project type
-- **Useful slash commands**: Which built-in commands matter most
-- **Multi-agent patterns**: When to use parallel agents or worktrees
-- **What NOT to ask Claude Code to do**: Things better handled by other tools
+- **Session workflow**: How to use the agent effectively for this project type (note runtime specifics — Claude Code slash-commands/hooks vs Codex custom agents)
+- **Useful commands/agents**: Which built-in commands (Claude Code) or custom agents (Codex) matter most
+- **Multi-agent patterns**: When to parallelize or isolate work on the runtime in use
+- **What NOT to delegate to the agent**: Things better handled by other tools
 
 ## Stack-Specific Adaptations
 
