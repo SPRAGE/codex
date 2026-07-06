@@ -58,7 +58,7 @@ fn skip_csi_sequence(chars: &mut Peekable<Chars<'_>>) {
 
 fn skip_string_control_sequence(chars: &mut Peekable<Chars<'_>>) {
     let mut escaped = false;
-    while let Some(ch) = chars.next() {
+    for ch in chars.by_ref() {
         if escaped {
             if ch == '\\' {
                 break;

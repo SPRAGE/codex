@@ -80,7 +80,7 @@ impl App {
         let reasoning_effort = self.chat_widget.current_reasoning_effort();
         let update_session = |session: &mut ThreadSessionState| {
             session.model = model.clone();
-            session.reasoning_effort = reasoning_effort;
+            session.reasoning_effort = reasoning_effort.clone();
         };
 
         if self.primary_thread_id == Some(active_thread_id)
@@ -507,14 +507,17 @@ mod tests {
         };
         let read_thread = Thread {
             id: read_thread_id.to_string(),
+            extra: None,
             session_id: read_thread_id.to_string(),
             forked_from_id: None,
             parent_thread_id: None,
             preview: "read thread".to_string(),
             ephemeral: false,
+            history_mode: Default::default(),
             model_provider: "read-provider".to_string(),
             created_at: 1,
             updated_at: 2,
+            recency_at: Some(2),
             status: codex_app_server_protocol::ThreadStatus::Idle,
             path: None,
             cwd: test_path_buf("/tmp/read").abs(),

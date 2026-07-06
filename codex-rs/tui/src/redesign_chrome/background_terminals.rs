@@ -200,13 +200,13 @@ fn terminal_status_span(terminal: &RedesignBackgroundTerminal) -> Span<'static> 
         RedesignBackgroundTerminalStatus::Running => "running".green(),
         RedesignBackgroundTerminalStatus::Completed => match terminal.exit_code {
             Some(0) | None => "done".dim(),
-            Some(code) => Span::from(format!("exit {code}")).yellow(),
+            Some(code) => Span::from(format!("exit {code}")).red(),
         },
         RedesignBackgroundTerminalStatus::Failed => match terminal.exit_code {
             Some(code) => Span::from(format!("failed {code}")).red(),
             None => "failed".red(),
         },
-        RedesignBackgroundTerminalStatus::Declined => "declined".yellow(),
+        RedesignBackgroundTerminalStatus::Declined => "declined".dim(),
     }
 }
 

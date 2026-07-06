@@ -1881,7 +1881,6 @@ fn system_rail_title(cell: &dyn HistoryCell) -> &'static str {
     } else if cell
         .as_any()
         .is::<history_cell::UpdateAvailableHistoryCell>()
-        || cell.as_any().is::<history_cell::CyberPolicyNoticeCell>()
         || cell.as_any().is::<history_cell::DeprecationNoticeCell>()
     {
         "NOTICE"

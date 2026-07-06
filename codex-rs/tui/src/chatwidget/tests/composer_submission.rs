@@ -730,6 +730,7 @@ async fn queued_restore_with_remote_images_keeps_local_placeholder_mapping() {
     });
 
     assert_eq!(chat.bottom_pane.composer_text(), text);
+    assert_eq!(chat.bottom_pane.composer_cursor(), text.len());
     assert_eq!(chat.bottom_pane.composer_text_elements(), text_elements);
     assert_eq!(chat.bottom_pane.composer_local_images(), local_images);
     assert_eq!(chat.remote_image_urls(), remote_image_urls);
@@ -1285,6 +1286,8 @@ async fn submit_user_message_ignores_inaccessible_app_mentions_from_bindings() {
                 description: Some("Directory-only app".to_string()),
                 logo_url: None,
                 logo_url_dark: None,
+                icon_assets: None,
+                icon_dark_assets: None,
                 distribution_channel: None,
                 branding: None,
                 app_metadata: None,

@@ -4,6 +4,7 @@
 //! entry, Ctrl-L clear, external editor launch, and agent navigation shortcuts.
 
 use super::*;
+use crate::app_backtrack::SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE;
 use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
 
@@ -31,9 +32,6 @@ pub(super) enum RedesignCtrlCAction {
 }
 
 const REDESIGN_LINE_SCROLL: usize = 3;
-
-const SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE: &str =
-    "Editing previous prompts is unavailable in side conversations.";
 
 pub(super) fn redesign_ctrl_c_action(
     event: &TuiEvent,
@@ -552,12 +550,7 @@ impl App {
             return Some(action);
         }
 
-        if self
-            .redesign_terminal_window_expanded_for_active_chat(terminal_count)
-            .is_none()
-        {
-            return None;
-        }
+        self.redesign_terminal_window_expanded_for_active_chat(terminal_count)?;
 
         let scroll_limit =
             redesign_chrome::background_terminal_window_scroll_limit(viewport_area, self);
