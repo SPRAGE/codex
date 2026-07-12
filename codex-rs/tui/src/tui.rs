@@ -99,15 +99,51 @@ impl Drop for Tui {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(windows))]
+    use std::io;
     use std::io::Write as _;
 
+    #[cfg(not(windows))]
+    use pretty_assertions::assert_eq;
+
+    #[cfg(not(windows))]
+    use super::cleanup_alternate_screen;
     use super::clear_for_viewport_change;
+    #[cfg(not(windows))]
+    use super::enable_alternate_screen_interactions;
+    #[cfg(not(windows))]
+    use super::enter_alternate_screen;
     use super::should_emit_notification;
     use crate::custom_terminal::Terminal as CustomTerminal;
     use crate::test_backend::VT100Backend;
     use codex_config::types::NotificationCondition;
     use ratatui::layout::Position;
     use ratatui::layout::Rect;
+
+    #[cfg(not(windows))]
+    struct SelectiveFailWriter {
+        output: Vec<u8>,
+        failures: Vec<(&'static [u8], &'static str)>,
+    }
+
+    #[cfg(not(windows))]
+    impl io::Write for SelectiveFailWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if let Some((_, message)) = self
+                .failures
+                .iter()
+                .find(|(pattern, _)| buf.windows(pattern.len()).any(|window| window == *pattern))
+            {
+                return Err(io::Error::other(*message));
+            }
+            self.output.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn unfocused_notification_condition_is_suppressed_when_focused() {
@@ -131,6 +167,82 @@ mod tests {
             NotificationCondition::Unfocused,
             /*terminal_focused*/ false
         ));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn alternate_screen_entry_without_mouse_capture_emits_no_mouse_enable_sequence() {
+        let mut output = Vec::new();
+
+        enter_alternate_screen(&mut output).expect("enter alternate screen");
+        enable_alternate_screen_interactions(&mut output, /*mouse_capture_enabled*/ false)
+            .expect("enable alternate screen interactions");
+
+        assert_eq!(output, b"\x1b[?1049h\x1b[?1007h");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn alternate_screen_interactions_preserve_legacy_mouse_capture_policy() {
+        let mut output = Vec::new();
+
+        enable_alternate_screen_interactions(&mut output, /*mouse_capture_enabled*/ true)
+            .expect("enable alternate screen interactions");
+
+        assert_eq!(
+            output,
+            b"\x1b[?1007h\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1015h\x1b[?1006h"
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn alternate_screen_cleanup_emits_every_defensive_transition() {
+        let mut output = Vec::new();
+
+        let cleanup = cleanup_alternate_screen(&mut output);
+
+        assert!(cleanup.leave_succeeded);
+        cleanup.into_result().expect("clean up alternate screen");
+        assert_eq!(
+            output,
+            b"\x1b[?1006l\x1b[?1015l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?1007l\x1b[?1049l"
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn alternate_screen_cleanup_continues_after_errors_and_preserves_the_first() {
+        let mut writer = SelectiveFailWriter {
+            output: Vec::new(),
+            failures: vec![(b"\x1b[?1006l", "mouse"), (b"\x1b[?1007l", "scroll")],
+        };
+
+        let cleanup = cleanup_alternate_screen(&mut writer);
+
+        assert!(cleanup.leave_succeeded);
+        let err = cleanup.into_result().expect_err("cleanup should fail");
+        assert_eq!(err.to_string(), "mouse");
+        assert_eq!(writer.output, b"\x1b[?1049l");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn alternate_screen_cleanup_reports_when_leaving_fails() {
+        let mut writer = SelectiveFailWriter {
+            output: Vec::new(),
+            failures: vec![(b"\x1b[?1049l", "leave")],
+        };
+
+        let cleanup = cleanup_alternate_screen(&mut writer);
+
+        assert!(!cleanup.leave_succeeded);
+        let err = cleanup.into_result().expect_err("cleanup should fail");
+        assert_eq!(err.to_string(), "leave");
+        assert_eq!(
+            writer.output,
+            b"\x1b[?1006l\x1b[?1015l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?1007l"
+        );
     }
 
     #[test]
@@ -235,6 +347,58 @@ impl Command for DisableAlternateScroll {
     }
 }
 
+fn enter_alternate_screen(writer: &mut impl Write) -> Result<()> {
+    execute!(writer, EnterAlternateScreen)
+}
+
+fn enable_alternate_screen_interactions(
+    writer: &mut impl Write,
+    mouse_capture_enabled: bool,
+) -> Result<()> {
+    if mouse_capture_enabled {
+        execute!(writer, EnableAlternateScroll, EnableMouseCapture)
+    } else {
+        execute!(writer, EnableAlternateScroll)
+    }
+}
+
+struct AlternateScreenCleanup {
+    first_error: Option<std::io::Error>,
+    leave_succeeded: bool,
+}
+
+impl AlternateScreenCleanup {
+    fn into_result(self) -> Result<()> {
+        match self.first_error {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
+    }
+}
+
+fn cleanup_alternate_screen(writer: &mut impl Write) -> AlternateScreenCleanup {
+    let mut first_error = None;
+
+    if let Err(err) = execute!(writer, DisableMouseCapture) {
+        first_error.get_or_insert(err);
+    }
+    if let Err(err) = execute!(writer, DisableAlternateScroll) {
+        first_error.get_or_insert(err);
+    }
+    let leave_succeeded = match execute!(writer, LeaveAlternateScreen) {
+        Ok(()) => true,
+        Err(err) => {
+            first_error.get_or_insert(err);
+            false
+        }
+    };
+
+    AlternateScreenCleanup {
+        first_error,
+        leave_succeeded,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RawModeRestore {
     Disable,
@@ -258,7 +422,10 @@ fn restore_common(
         KeyboardRestore::ResetAfterExit => keyboard_modes::reset_keyboard_reporting_after_exit(),
     }
 
-    if let Err(err) = execute!(stdout(), DisableBracketedPaste, DisableMouseCapture) {
+    if let Err(err) = execute!(stdout(), DisableBracketedPaste) {
+        first_error.get_or_insert(err);
+    }
+    if let Err(err) = cleanup_alternate_screen(&mut stdout()).into_result() {
         first_error.get_or_insert(err);
     }
     let _ = execute!(stdout(), DisableFocusChange);
@@ -551,6 +718,8 @@ pub struct Tui {
     is_zellij: bool,
     // When false, enter_alt_screen() becomes a no-op.
     alt_screen_enabled: bool,
+    // Whether alternate-screen entry should reserve pointer input for Codex.
+    mouse_capture_enabled: bool,
     // Keeps unmanaged process stderr writes out of the inline viewport.
     _stderr_guard: terminal_stderr::TerminalStderrGuard,
 }
@@ -604,6 +773,7 @@ impl Tui {
             notification_condition: NotificationCondition::default(),
             is_zellij,
             alt_screen_enabled: true,
+            mouse_capture_enabled: true,
             _stderr_guard: stderr_guard,
         }
     }
@@ -611,6 +781,11 @@ impl Tui {
     /// Set whether alternate screen is enabled. When false, enter_alt_screen() becomes a no-op.
     pub fn set_alt_screen_enabled(&mut self, enabled: bool) {
         self.alt_screen_enabled = enabled;
+    }
+
+    /// Set whether alternate-screen UI should capture pointer input.
+    pub fn set_mouse_capture_enabled(&mut self, enabled: bool) {
+        self.mouse_capture_enabled = enabled;
     }
 
     pub fn set_notification_settings(
@@ -666,6 +841,12 @@ impl Tui {
 
         if let Err(err) = mode.restore() {
             tracing::warn!("failed to restore terminal modes before external program: {err}");
+        }
+        if was_alt_screen
+            && self.is_alt_screen_active()
+            && let Err(err) = self.leave_alt_screen()
+        {
+            tracing::warn!("failed to reconcile alternate screen before external program: {err}");
         }
         if let Err(err) = terminal_stderr::pause() {
             tracing::warn!("failed to restore terminal stderr before external program: {err}");
@@ -743,15 +924,13 @@ impl Tui {
             return Ok(());
         }
         if !self.is_alt_screen_active() {
-            execute!(self.terminal.backend_mut(), EnterAlternateScreen)?;
+            enter_alternate_screen(self.terminal.backend_mut())?;
             self.alt_saved_viewport = Some(self.terminal.viewport_area);
             self.alt_screen_active.store(true, Ordering::Relaxed);
         }
-        // Enable mouse capture so wheel gestures belong to Codex instead of the parent scrollback.
-        let _ = execute!(
+        let _ = enable_alternate_screen_interactions(
             self.terminal.backend_mut(),
-            EnableAlternateScroll,
-            EnableMouseCapture
+            self.mouse_capture_enabled,
         );
         if let Ok(size) = self.terminal.size() {
             self.terminal.set_viewport_area(ratatui::layout::Rect::new(
@@ -770,24 +949,18 @@ impl Tui {
 
     /// Leave alternate screen and restore the previously saved inline viewport, if any.
     pub fn leave_alt_screen(&mut self) -> Result<()> {
-        if !self.alt_screen_enabled {
-            return Ok(());
-        }
         if !self.is_alt_screen_active() {
             return Ok(());
         }
-        // Disable mouse capture and alternate scroll when leaving alt-screen.
-        let _ = execute!(
-            self.terminal.backend_mut(),
-            DisableMouseCapture,
-            DisableAlternateScroll
-        );
-        let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
-        if let Some(saved) = self.alt_saved_viewport.take() {
-            self.terminal.set_viewport_area(saved);
+
+        let cleanup = cleanup_alternate_screen(self.terminal.backend_mut());
+        if cleanup.leave_succeeded {
+            if let Some(saved) = self.alt_saved_viewport.take() {
+                self.terminal.set_viewport_area(saved);
+            }
+            self.alt_screen_active.store(false, Ordering::Relaxed);
         }
-        self.alt_screen_active.store(false, Ordering::Relaxed);
-        Ok(())
+        cleanup.into_result()
     }
 
     pub fn insert_history_lines(&mut self, lines: Vec<Line<'static>>) {
@@ -919,7 +1092,11 @@ impl Tui {
         stdout().sync_update(|_| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
-                prepared.apply(&mut self.terminal)?;
+                prepared.apply(
+                    &mut self.terminal,
+                    self.mouse_capture_enabled,
+                    &self.suspend_context,
+                )?;
             }
 
             let terminal = &mut self.terminal;
@@ -1051,7 +1228,11 @@ impl Tui {
         stdout().sync_update(|_| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
-                prepared.apply(&mut self.terminal)?;
+                prepared.apply(
+                    &mut self.terminal,
+                    self.mouse_capture_enabled,
+                    &self.suspend_context,
+                )?;
             }
 
             let terminal = &mut self.terminal;

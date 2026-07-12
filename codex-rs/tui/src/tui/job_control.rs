@@ -9,18 +9,12 @@ use std::sync::atomic::Ordering;
 
 use crossterm::cursor::MoveTo;
 use crossterm::cursor::Show;
-use crossterm::event::DisableMouseCapture;
-use crossterm::event::EnableMouseCapture;
 use crossterm::event::KeyCode;
-use crossterm::terminal::EnterAlternateScreen;
-use crossterm::terminal::LeaveAlternateScreen;
 use ratatui::crossterm::execute;
 use ratatui::layout::Rect;
 
 use crate::key_hint;
 
-use super::DisableAlternateScroll;
-use super::EnableAlternateScroll;
 use super::Terminal;
 
 pub const SUSPEND_KEY: key_hint::KeyBinding = key_hint::ctrl(KeyCode::Char('z'));
@@ -64,10 +58,8 @@ impl SuspendContext {
     /// - Trigger SIGTSTP so the process can be resumed and continue drawing with the saved state.
     pub(crate) fn suspend(&self, alt_screen_active: &Arc<AtomicBool>) -> Result<()> {
         if alt_screen_active.load(Ordering::Relaxed) {
-            // Leave alt-screen so the terminal returns to the normal buffer while suspended; also turn off alt-scroll.
-            let _ = execute!(stdout(), DisableMouseCapture);
-            let _ = execute!(stdout(), DisableAlternateScroll);
-            let _ = execute!(stdout(), LeaveAlternateScreen);
+            // Return to the normal buffer while suspended, defensively disabling interactions.
+            let _ = super::cleanup_alternate_screen(&mut stdout()).into_result();
             self.set_resume_action(ResumeAction::RestoreAlt);
         } else {
             self.set_resume_action(ResumeAction::RealignInline);
@@ -181,21 +173,33 @@ pub(crate) enum PreparedResumeAction {
 }
 
 impl PreparedResumeAction {
-    pub(crate) fn apply(self, terminal: &mut Terminal) -> Result<()> {
+    pub(crate) fn apply(
+        self,
+        terminal: &mut Terminal,
+        mouse_capture_enabled: bool,
+        suspend_context: &SuspendContext,
+    ) -> Result<()> {
         match self {
             PreparedResumeAction::RealignViewport(area) => {
                 terminal.set_viewport_area(area);
             }
             PreparedResumeAction::RestoreAltScreen => {
-                execute!(terminal.backend_mut(), EnterAlternateScreen)?;
-                execute!(
-                    terminal.backend_mut(),
-                    EnableAlternateScroll,
-                    EnableMouseCapture
-                )?;
-                if let Ok(size) = terminal.size() {
-                    terminal.set_viewport_area(Rect::new(0, 0, size.width, size.height));
-                    terminal.clear()?;
+                let restore_result = (|| {
+                    super::enter_alternate_screen(terminal.backend_mut())?;
+                    super::enable_alternate_screen_interactions(
+                        terminal.backend_mut(),
+                        mouse_capture_enabled,
+                    )?;
+                    if let Ok(size) = terminal.size() {
+                        terminal.set_viewport_area(Rect::new(0, 0, size.width, size.height));
+                        terminal.clear()?;
+                    }
+                    Ok(())
+                })();
+                if let Err(err) = restore_result {
+                    let _ = super::cleanup_alternate_screen(terminal.backend_mut()).into_result();
+                    suspend_context.set_resume_action(ResumeAction::RestoreAlt);
+                    return Err(err);
                 }
             }
         }

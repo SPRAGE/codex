@@ -1364,6 +1364,8 @@ async fn run_ratatui_app(
         tracing::error!("panic: {info}");
         prev_hook(info);
     }));
+    let redesigned_ui_enabled = cli.redesigned_ui_enabled();
+    let mut terminal_restore_guard = TerminalRestoreGuard::new();
     let mut initialized_terminal = tui::init()?;
     initialized_terminal.terminal.clear()?;
 
@@ -1372,7 +1374,11 @@ async fn run_ratatui_app(
         initialized_terminal.enhanced_keys_supported,
         initialized_terminal.stderr_guard,
     );
-    let mut terminal_restore_guard = TerminalRestoreGuard::new();
+    tui.set_mouse_capture_enabled(!redesigned_ui_enabled);
+    tui.set_alt_screen_enabled(determine_alt_screen_mode(
+        cli.no_alt_screen,
+        initial_config.tui_alternate_screen,
+    ));
 
     #[cfg(not(debug_assertions))]
     {
@@ -1789,7 +1795,6 @@ async fn run_ratatui_app(
     #[cfg(not(target_os = "windows"))]
     let should_prompt_windows_sandbox_nux_at_startup = false;
 
-    let redesigned_ui_enabled = cli.redesigned_ui_enabled();
     let Cli {
         prompt,
         shared,
@@ -1798,11 +1803,7 @@ async fn run_ratatui_app(
     } = cli;
     let images = shared.into_inner().images;
 
-    let use_alt_screen = if redesigned_ui_enabled {
-        !no_alt_screen
-    } else {
-        determine_alt_screen_mode(no_alt_screen, config.tui_alternate_screen)
-    };
+    let use_alt_screen = determine_alt_screen_mode(no_alt_screen, config.tui_alternate_screen);
     tui.set_alt_screen_enabled(use_alt_screen);
     let mut app_server = match app_server {
         Some(app_server) => app_server,
@@ -2236,23 +2237,23 @@ mod tests {
     }
 
     #[test]
-    fn alternate_screen_auto_uses_alt_screen() {
-        assert!(determine_alt_screen_mode(
-            /*no_alt_screen*/ false,
-            AltScreenMode::Auto,
-        ));
-        assert!(determine_alt_screen_mode(
-            /*no_alt_screen*/ false,
-            AltScreenMode::Always,
-        ));
-        assert!(!determine_alt_screen_mode(
-            /*no_alt_screen*/ false,
-            AltScreenMode::Never,
-        ));
-        assert!(!determine_alt_screen_mode(
-            /*no_alt_screen*/ true,
-            AltScreenMode::Auto,
-        ));
+    fn alternate_screen_mode_honors_config_and_cli_override() {
+        let cases = [
+            (false, AltScreenMode::Auto, true),
+            (false, AltScreenMode::Always, true),
+            (false, AltScreenMode::Never, false),
+            (true, AltScreenMode::Auto, false),
+            (true, AltScreenMode::Always, false),
+            (true, AltScreenMode::Never, false),
+        ];
+
+        for (no_alt_screen, tui_alternate_screen, expected) in cases {
+            assert_eq!(
+                determine_alt_screen_mode(no_alt_screen, tui_alternate_screen),
+                expected,
+                "no_alt_screen={no_alt_screen}, tui_alternate_screen={tui_alternate_screen:?}",
+            );
+        }
     }
 
     #[test]
