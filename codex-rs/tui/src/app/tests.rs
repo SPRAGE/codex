@@ -4666,6 +4666,47 @@ async fn thread_switch_replay_buffer_is_disabled_without_row_cap() {
 }
 
 #[tokio::test]
+async fn redesign_does_not_start_terminal_history_replay_buffers() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    app.redesign_chrome_enabled = true;
+    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(3);
+
+    app.begin_initial_history_replay_buffer();
+    let initial_replay_buffer = app.initial_history_replay_buffer.is_some();
+    app.begin_thread_switch_history_replay_buffer();
+    let thread_switch_replay_buffer = app.initial_history_replay_buffer.is_some();
+
+    assert_eq!(
+        (initial_replay_buffer, thread_switch_replay_buffer),
+        (false, false)
+    );
+}
+
+#[tokio::test]
+async fn redesign_resize_does_not_schedule_terminal_history_reflow() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    app.redesign_chrome_enabled = true;
+    app.transcript_reflow.schedule_immediate();
+    app.transcript_reflow.mark_resize_requested_during_stream();
+    let frame_requester = crate::tui::FrameRequester::test_dummy();
+
+    let should_rebuild = app.handle_draw_size_change(
+        ratatui::layout::Size::new(/*width*/ 100, /*height*/ 24),
+        ratatui::layout::Size::new(/*width*/ 118, /*height*/ 35),
+        &frame_requester,
+    );
+
+    assert_eq!(
+        (
+            should_rebuild,
+            app.transcript_reflow.has_pending_reflow(),
+            app.transcript_reflow.take_stream_finish_reflow_needed(),
+        ),
+        (false, false, false)
+    );
+}
+
+#[tokio::test]
 async fn height_shrink_schedules_resize_reflow() {
     let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
     let frame_requester = crate::tui::FrameRequester::test_dummy();

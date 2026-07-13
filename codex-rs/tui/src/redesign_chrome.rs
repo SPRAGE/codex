@@ -3008,6 +3008,39 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn finalized_markdown_table_stays_within_redesign_columns_snapshot() {
+        let mut app = crate::app::test_support::make_test_app().await;
+        app.redesign_chrome_enabled = true;
+        let cwd = app.config.cwd.clone();
+        app.transcript_cells = vec![std::sync::Arc::new(history_cell::AgentMarkdownCell::new(
+            concat!(
+                "The redesign owns the complete retained frame.\n\n",
+                "| Component | Rendering owner |\n",
+                "| --- | --- |\n",
+                "| Sidebar | redesign frame |\n",
+                "| Transcript | redesign frame |\n",
+                "| Composer | redesign frame |\n",
+                "| Footer | redesign frame |\n",
+            )
+            .to_string(),
+            cwd.as_path(),
+        ))];
+
+        let mut terminal =
+            Terminal::new(TestBackend::new(/*width*/ 100, /*height*/ 24)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                render_app(frame.area(), frame.buffer_mut(), &app);
+            })
+            .expect("draw");
+
+        assert_snapshot!(
+            "redesign_chrome_finalized_markdown_table_100x24",
+            terminal.backend().to_string()
+        );
+    }
+
     #[test]
     fn transcript_render_keeps_markdown_list_items_snapshot() {
         let mut terminal =

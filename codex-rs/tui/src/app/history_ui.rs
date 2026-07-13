@@ -118,6 +118,12 @@ impl App {
     }
 
     pub(super) fn queue_clear_ui_header(&mut self, tui: &mut tui::Tui) {
+        if self.redesign_chrome_enabled {
+            tui.clear_pending_history_lines();
+            tui.frame_requester().schedule_frame();
+            return;
+        }
+
         let width = self
             .chat_widget
             .history_wrap_width(tui.terminal.last_known_screen_size.width);

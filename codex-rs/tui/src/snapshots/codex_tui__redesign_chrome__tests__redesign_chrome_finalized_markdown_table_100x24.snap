@@ -1,0 +1,28 @@
+---
+source: tui/src/redesign_chrome.rs
+expression: terminal.backend().to_string()
+---
+"CODEX_CLI dev          |Model: gpt-5.6-sol default ctx: 100% tokens: total=0 input=0 output=0       "
+"                       |permissions: :read-only approval: on-request/user                           "
+"                       |----------------------------------------------------------------------------"
+" CHATS                 | Codex                                                                      "
+" Alt-B focus           | ╭────────────────────────────────────────────────╮                         "
+"                       | │ The redesign owns the complete retained frame. │                         "
+" No chats yet          | │                                                │                         "
+"                       | │  Component     Rendering owner                 │                         "
+"                       | │ ━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━                │                         "
+"                       | │  Sidebar       redesign frame                  │                         "
+"                       | │ ────────────  ─────────────────                │                         "
+"                       | │  Transcript    redesign frame                  │                         "
+"                       | │ ────────────  ─────────────────                │                         "
+" ACTIONS               | │  Composer      redesign frame                  │                         "
+"  N      NEW CHAT      | │ ────────────  ─────────────────                │                         "
+"  F      FINAL ONLY OFF| │  Footer        redesign frame                  │                         "
+"  Alt-/  COMMANDS      | ╰────────────────────────────────────────────────╯                         "
+"  Alt-M  MODELS        |                                                                            "
+"  C-R    HISTORY       |                                                                            "
+"  C-T    TRANSCRIPT    |----------------------------------------------------------------------------"
+"  Alt-T  TERMINALS     |MSG> Describe the next change...                                            "
+"  C-G    EDITOR        |----------------------------------------------------------------------------"
+"                       |/tmp/project · unknown · -- · New thread                                    "
+"                       |Alt-H Help · Alt-/ Cmds · Alt-M Model · Alt-P Plan · Alt-T Term · C-C Exit  "
